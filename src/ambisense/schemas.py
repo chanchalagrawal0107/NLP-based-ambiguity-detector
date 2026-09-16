@@ -168,7 +168,17 @@ class NounChunkInfo(BaseModel):
     char_end: int
     sentence_index: int = 0
     is_plural: bool = False
-    is_person: bool = False
+    is_animate_candidate: bool = Field(
+        default=False,
+        description=(
+            "Whether this phrase could be the antecedent of a personal "
+            "pronoun. True for named people, organisations and national or "
+            "religious groups, and for role nouns such as 'the manager'. "
+            "Named 'animate candidate' rather than 'person' because "
+            "organisations are included: 'The company said it would...' "
+            "takes a pronoun, but a company is not a person."
+        ),
+    )
 
 
 class SentenceInfo(BaseModel):

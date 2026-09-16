@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 
+from ambisense.ambiguity import DetectorRegistry
 from ambisense.config import ConfigError, load_settings
 from ambisense.logging_setup import configure_logging, get_logger
 from ambisense.preprocessing import (
@@ -21,7 +23,7 @@ from ambisense.preprocessing import (
     ModelLoadError,
     clean_and_validate,
 )
-from ambisense.schemas import LinguisticAnalysis
+from ambisense.schemas import AmbiguityCandidate, LinguisticAnalysis
 
 logger = get_logger(__name__)
 
@@ -52,6 +54,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--dump-nlp",
         action="store_true",
         help="Print the traditional NLP analysis (POS, dependencies, NER).",
+    )
+    parser.add_argument(
+        "--detect-only",
+        action="store_true",
+        help=(
+            "Run the rule-based detectors and print the candidates. "
+            "No LLM call is made."
+        ),
+    )
+    parser.add_argument(
+        "--show-evidence",
+        action="store_true",
+        help="With --detect-only, print the full evidence for each candidate.",
     )
     parser.add_argument(
         "--check-config",
@@ -117,16 +132,98 @@ def render_nlp_analysis(analysis: LinguisticAnalysis) -> str:
     lines.append(_rule("NOUN CHUNKS"))
     if analysis.noun_chunks:
         lines.append(
-            f"  {'CHUNK':<24} {'ROOT':<14} {'DEP':<12} {'PLURAL':<8} PERSON"
+            f"  {'CHUNK':<24} {'ROOT':<14} {'DEP':<12} {'PLURAL':<8} ANIMATE"
         )
         for chunk in analysis.noun_chunks:
             lines.append(
                 f"  {chunk.text:<24} {chunk.root_text:<14} {chunk.root_dep:<12} "
-                f"{str(chunk.is_plural):<8} {chunk.is_person}"
+                f"{str(chunk.is_plural):<8} {chunk.is_animate_candidate}"
             )
     else:
         lines.append("  (none found)")
     lines.append("")
+    return "\n".join(lines)
+
+
+def _format_evidence(evidence: dict, indent: str = "    ") -> list[str]:
+    """Render an evidence dict as aligned ``key: value`` lines."""
+    lines: list[str] = []
+    for key in sorted(evidence):
+        value = evidence[key]
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                lines.append(f"{indent}{key}:")
+                for item in value:
+                    summary = ", ".join(f"{k}={v}" for k, v in item.items())
+                    lines.append(f"{indent}  - {summary}")
+                continue
+            value = ", ".join(str(item) for item in value) or "(none)"
+        elif isinstance(value, dict):
+            value = ", ".join(f"{k}={v}" for k, v in value.items())
+        lines.append(f"{indent}{key}: {value}")
+    return lines
+
+
+def render_candidates(
+    text: str,
+    candidates: list[AmbiguityCandidate],
+    detector_names: list[str],
+    *,
+    show_evidence: bool = False,
+    context: str | None = None,
+) -> str:
+    """Render the rule-based detection result for the terminal."""
+    bar = "=" * 70
+    lines = [bar, "AmbiSense - Rule-Based Detection (Phase 2)", bar, ""]
+    lines.append("Input:")
+    lines.append(f"  {text}")
+    if context:
+        lines.append("")
+        lines.append("Context:")
+        lines.append(f"  {context}")
+    lines.append("")
+    lines.append(f"Detectors run: {', '.join(detector_names) or '(none enabled)'}")
+    lines.append(f"Candidates:    {len(candidates)}")
+    lines.append("")
+
+    if not candidates:
+        lines.append("  No ambiguity candidates were found by the rule-based")
+        lines.append("  detectors. This is not proof the text is unambiguous -")
+        lines.append("  see the Limitations section of the README.")
+        lines.append("")
+        lines.append(bar)
+        return "\n".join(lines)
+
+    for position, candidate in enumerate(candidates, start=1):
+        lines.append("-" * 70)
+        lines.append(
+            f"[{position}] {candidate.type_hint.value.upper()}"
+            f"   (detector: {candidate.detector_name},"
+            f" signal strength: {candidate.prior:.2f})"
+        )
+        lines.append("")
+        lines.append("  Span:")
+        lines.append(f"    {candidate.span_text!r} "
+                     f"[chars {candidate.char_start}-{candidate.char_end}]")
+        lines.append("")
+        lines.append("  Reason:")
+        for line in textwrap.wrap(candidate.explanation, width=64):
+            lines.append(f"    {line}")
+        if show_evidence:
+            lines.append("")
+            lines.append("  Evidence:")
+            lines.extend(_format_evidence(candidate.evidence))
+        lines.append("")
+
+    lines.append(bar)
+    lines.append(
+        "Note: 'signal strength' is the strength of the linguistic evidence,"
+    )
+    lines.append(
+        "NOT a probability that the text is ambiguous. Confirming genuine"
+    )
+    lines.append("ambiguity is the job of the LLM layer (Phase 4).")
+    lines.append(bar)
     return "\n".join(lines)
 
 
@@ -178,6 +275,42 @@ def command_check_config(settings) -> int:
     return EXIT_OK if (analyzer_ok and wordnet_ok) else EXIT_CONFIG_ERROR
 
 
+def command_detect_only(
+    settings,
+    text: str,
+    context: str | None,
+    show_evidence: bool,
+) -> int:
+    """Validation -> linguistic analysis -> rule-based detectors -> report.
+
+    Makes no network call and uses no LLM.
+    """
+    cleaned = clean_and_validate(text, context, settings.nlp)
+    for warning in cleaned.warnings:
+        logger.warning("%s", warning)
+
+    analyzer = LinguisticAnalyzer(settings.nlp.spacy_model)
+    analysis = analyzer.analyze(cleaned.text)
+
+    registry = DetectorRegistry(settings.detectors)
+    candidates = registry.run(analysis)
+
+    print(render_candidates(
+        cleaned.text,
+        candidates,
+        registry.detector_names,
+        show_evidence=show_evidence,
+        context=cleaned.context,
+    ))
+
+    if cleaned.context:
+        logger.info(
+            "Context was recorded but does not yet influence detection; "
+            "context-aware analysis arrives in Phase 3."
+        )
+    return EXIT_OK
+
+
 def command_dump_nlp(settings, text: str, context: str | None) -> int:
     cleaned = clean_and_validate(text, context, settings.nlp)
     for warning in cleaned.warnings:
@@ -217,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.text:
         print("No text supplied. Try:\n"
+              '  python main.py --detect-only "I saw the man with the telescope."\n'
               '  python main.py --dump-nlp "I saw the man with the telescope."\n'
               "  python main.py --check-config", file=sys.stderr)
         return EXIT_USER_ERROR
@@ -224,8 +358,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.dump_nlp:
             return command_dump_nlp(settings, args.text, args.context)
-        print("Full analysis is implemented in a later phase. "
-              "Use --dump-nlp for the current NLP layer output.",
+        if args.detect_only:
+            return command_detect_only(
+                settings, args.text, args.context, args.show_evidence
+            )
+        print("Full analysis (with LLM reasoning) is implemented in a later "
+              "phase. Use --detect-only for rule-based candidate detection, "
+              "or --dump-nlp for the NLP layer output.",
               file=sys.stderr)
         return EXIT_USER_ERROR
     except InputValidationError as exc:

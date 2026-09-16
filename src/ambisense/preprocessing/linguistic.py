@@ -45,7 +45,7 @@ class ModelLoadError(RuntimeError):
 # Heuristic animacy lexicon. spaCy's NER only labels *named* people ("John"),
 # so a role noun such as "the manager" needs this list to become a candidate
 # antecedent for "he"/"she". Documented as a heuristic in the README.
-PERSON_NOUNS: frozenset[str] = frozenset({
+ANIMATE_NOUNS: frozenset[str] = frozenset({
     "man", "woman", "boy", "girl", "child", "person", "people", "student",
     "teacher", "manager", "developer", "engineer", "doctor", "nurse", "friend",
     "brother", "sister", "father", "mother", "parent", "son", "daughter",
@@ -56,7 +56,7 @@ PERSON_NOUNS: frozenset[str] = frozenset({
 })
 
 _PLURAL_TAGS = frozenset({"NNS", "NNPS"})
-_PERSON_ENT_LABELS = frozenset({"PERSON", "ORG", "NORP"})
+_ANIMATE_ENT_LABELS = frozenset({"PERSON", "ORG", "NORP"})
 
 
 @lru_cache(maxsize=4)
@@ -169,7 +169,7 @@ class LinguisticAnalyzer:
                 char_end=chunk.end_char,
                 sentence_index=sentence_of_token.get(chunk.root.i, 0),
                 is_plural=self._is_plural(chunk.root),
-                is_person=self._is_person(chunk.root),
+                is_animate_candidate=self._is_animate_candidate(chunk.root),
             )
             for chunk in doc.noun_chunks
         ]
@@ -195,8 +195,8 @@ class LinguisticAnalyzer:
         return "Plur" in token.morph.get("Number")
 
     @staticmethod
-    def _is_person(token: Any) -> bool:
-        """Animacy heuristic: NER label, or membership of PERSON_NOUNS."""
-        if token.ent_type_ in _PERSON_ENT_LABELS:
+    def _is_animate_candidate(token: Any) -> bool:
+        """Animacy heuristic: NER label, or membership of ANIMATE_NOUNS."""
+        if token.ent_type_ in _ANIMATE_ENT_LABELS:
             return True
-        return token.lemma_.lower() in PERSON_NOUNS
+        return token.lemma_.lower() in ANIMATE_NOUNS

@@ -52,17 +52,27 @@ detectors:
   pragmatic: true
 
   lexical_settings:
-    # A word must have at least this many WordNet senses for its POS to be a
-    # lexical-ambiguity candidate.
-    min_senses: 3
+    # WordNet is very fine-grained: "cat" has 8 noun senses and "mat" has 7,
+    # so a raw sense count alone flags almost every concrete noun. We
+    # therefore require BOTH a sense count and a spread across distinct
+    # WordNet semantic domains (lexnames such as noun.animal, noun.artifact).
+    # "bank" spans 5 domains; "telescope" spans 1.
+    min_senses: 4
+    min_domains: 3
     # Only these coarse POS tags are considered.
     allowed_pos: [NOUN, VERB, ADJ, ADV]
     # Words that are technically polysemous but practically unambiguous.
     # Filtering these is what keeps precision from collapsing.
     stoplist: [be, have, do, get, make, take, go, come, give, say, know,
                thing, way, time, year, day, people, man, woman, use, work,
-               good, new, first, last, long, great, little, own, other]
+               good, new, first, last, long, great, little, own, other,
+               see, look, want, need, try, ask, tell, feel, leave, put,
+               sit, stand, turn, keep, let, seem, help, show, part, place]
     min_word_length: 3
+    # Even after filtering, a long sentence can yield many candidates. Keep
+    # only the strongest few per sentence so the report stays readable.
+    # Ranking is by `prior`, so this is deterministic.
+    max_candidates_per_sentence: 3
 
   syntactic_settings:
     # Prepositions that commonly create attachment ambiguity.
@@ -73,22 +83,52 @@ detectors:
     detect_relative_clause: true
 
   referential_settings:
-    # Pronouns we attempt to resolve.
-    pronouns: [he, she, it, they, him, her, them, his, hers, their, theirs, this, that]
+    # Personal pronouns we attempt to resolve. Demonstratives ("this",
+    # "that") are deliberately excluded: spaCy tags "that" as a subordinating
+    # conjunction in "John told David THAT he was late", so including it
+    # generates spurious antecedent searches.
+    pronouns: [he, she, it, they, him, her, them, his, her, hers, their, theirs]
+    # Only tokens carrying these fine-grained tags are treated as pronouns.
+    pronoun_tags: [PRP, PRP$]
     # How many preceding sentences to search for antecedents.
     antecedent_window_sentences: 2
-    # At least this many surviving candidates makes it ambiguous.
+    # At least this many surviving candidates makes it a candidate ambiguity.
     min_candidates: 2
+
+  semantic_settings:
+    # "Tough constructions": ADJ + to-infinitive, where the subject can be
+    # read as either the agent or the patient of the infinitive.
+    #   "The chicken is ready to eat."  ->  chicken eats / chicken is eaten
+    detect_tough_constructions: true
+    tough_adjectives: [ready, easy, hard, difficult, tough, simple, safe,
+                       dangerous, pleasant, nice, good, fun, impossible,
+                       slow, quick, expensive, cheap]
+    # Verbs that cannot take an object, so the passive ("to be eaten")
+    # reading is unavailable and the construction is not ambiguous.
+    intransitive_verbs: [go, come, arrive, leave, sleep, sit, stand, wait,
+                         fall, rise, happen, occur, appear, die]
+    # Noun-noun compounds leave the relation between the nouns unstated
+    # ("student protest" = by students or about students).
+    detect_noun_compounds: true
 
   scope_settings:
     quantifiers: [every, all, each, some, any, no, none, many, few, most, several]
     negations: [not, "n't", never, no, none, nobody, nothing]
+    # "no" appears in both lists above ("no student" is a negative
+    # quantifier). Requiring two DISTINCT tokens stops a single word from
+    # satisfying both halves of the rule and triggering on itself.
+    require_distinct_tokens: true
+    # Also flag two quantifiers in one clause ("every / some" interaction).
+    detect_quantifier_pairs: true
 
   pragmatic_settings:
     # Modal + 2nd person interrogative => possible indirect speech act.
     request_modals: [can, could, would, will, might]
     indirect_markers: ["do you know", "is it possible", "would you mind",
                        "have you got", "i wonder"]
+    # The literal/indirect split only arises for verbs describing an action
+    # the hearer could perform, so a question mark alone is not enough.
+    require_question_mark: true
 
 semantic_analysis:
   # Context-based word-sense ranking (the "crane" feature).

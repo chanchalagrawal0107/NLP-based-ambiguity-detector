@@ -87,13 +87,32 @@ class TestLinguisticAnalyzer:
         for token in analysis.tokens:
             assert text[token.char_start:token.char_end] == token.text
 
-    def test_person_heuristic_flags_role_nouns(self, analyzer):
-        """Needed so 'the manager' can be an antecedent for 'he'."""
+    def test_animate_heuristic_flags_role_nouns(self, analyzer):
+        """Needed so 'the manager' can be an antecedent for 'he'.
+
+        Renamed from ``is_person`` in Phase 2: the underlying check also
+        accepts ORG and NORP entities, so 'person' was too narrow a name.
+        The detection logic is unchanged.
+        """
         analysis = analyzer.analyze(
             "The manager told the developer that he needed to fix the bug."
         )
-        persons = {c.root_lemma for c in analysis.noun_chunks if c.is_person}
-        assert {"manager", "developer"} <= persons
+        animate = {
+            chunk.root_lemma
+            for chunk in analysis.noun_chunks
+            if chunk.is_animate_candidate
+        }
+        assert {"manager", "developer"} <= animate
+
+    def test_organisations_are_animate_candidates(self, analyzer):
+        """Documents *why* the field is not called ``is_person``."""
+        analysis = analyzer.analyze("Microsoft said it would release the patch.")
+        animate = {
+            chunk.root_text
+            for chunk in analysis.noun_chunks
+            if chunk.is_animate_candidate
+        }
+        assert "Microsoft" in animate
 
     def test_named_entities_are_extracted(self, analyzer):
         analysis = analyzer.analyze("John told David that he was late.")

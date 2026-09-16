@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -90,11 +90,32 @@ class DetectorsConfig(BaseModel):
     lexical_settings: dict[str, Any] = Field(default_factory=dict)
     syntactic_settings: dict[str, Any] = Field(default_factory=dict)
     referential_settings: dict[str, Any] = Field(default_factory=dict)
+    semantic_settings: dict[str, Any] = Field(default_factory=dict)
     scope_settings: dict[str, Any] = Field(default_factory=dict)
     pragmatic_settings: dict[str, Any] = Field(default_factory=dict)
 
+    # Names of every detector the registry knows about, in the order they run.
+    # Declared once here so the registry, the CLI and the tests cannot drift
+    # out of step with one another.
+    DETECTOR_NAMES: ClassVar[tuple[str, ...]] = (
+        "lexical", "syntactic", "referential", "semantic", "scope", "pragmatic",
+    )
+
     def is_enabled(self, name: str) -> bool:
         return bool(getattr(self, name, False))
+
+    def settings_for(self, name: str) -> dict[str, Any]:
+        """Return the ``<name>_settings`` block, or an empty dict if absent.
+
+        Detectors read their thresholds through this accessor so that a
+        missing YAML block degrades to "use the detector's own defaults"
+        rather than raising.
+        """
+        return getattr(self, f"{name}_settings", {}) or {}
+
+    def enabled_names(self) -> list[str]:
+        """Enabled detector names, in declaration order (deterministic)."""
+        return [name for name in self.DETECTOR_NAMES if self.is_enabled(name)]
 
 
 class SemanticAnalysisConfig(BaseModel):

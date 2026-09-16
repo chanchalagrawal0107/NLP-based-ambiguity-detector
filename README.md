@@ -1,10 +1,11 @@
 # AmbiSense — NLP-Based Ambiguity Detection and Resolution System
 
-> **Status: Work in progress (Phase 1 of 8 complete).**
-> This repository currently contains the configuration foundation and the
-> traditional NLP analysis layer. Ambiguity detection, the semantic layer, LLM
-> integration, scoring, the web interface and evaluation are **not implemented
-> yet** and are clearly marked as planned throughout this document.
+> **Status: Work in progress (Phase 2 of 8 complete).**
+> This repository currently contains the configuration foundation, the
+> traditional NLP analysis layer, and the rule-based ambiguity **candidate**
+> detection layer. The semantic similarity layer, LLM integration, ambiguity
+> scoring, the web interface and evaluation are **not implemented yet** and are
+> clearly marked as planned throughout this document.
 
 ---
 
@@ -20,20 +21,21 @@
 8. [Current Implementation Status](#8-current-implementation-status)
 9. [Phase 0 — Foundation](#9-phase-0--foundation-complete)
 10. [Phase 1 — Schemas and NLP Layer](#10-phase-1--schemas-and-nlp-layer-complete)
-11. [Installation](#11-installation)
-12. [Current CLI Usage](#12-current-cli-usage)
-13. [Example Commands](#13-example-commands)
-14. [Example NLP Output](#14-example-nlp-output)
-15. [Configuration](#15-configuration)
-16. [Environment Variables](#16-environment-variables)
-17. [Testing](#17-testing)
-18. [Project Structure](#18-project-structure)
-19. [Design Decisions](#19-design-decisions)
-20. [Known Limitations](#20-known-limitations)
-21. [Planned Development Phases](#21-planned-development-phases)
-22. [Technology Stack](#22-technology-stack)
-23. [Future Work](#23-future-work)
-24. [License](#24-license)
+11. [Phase 2 — Rule-Based Ambiguity Detection](#11-phase-2--rule-based-ambiguity-detection-complete)
+12. [Installation](#12-installation)
+13. [Current CLI Usage](#13-current-cli-usage)
+14. [Example Commands](#14-example-commands)
+15. [Example NLP Output](#15-example-nlp-output)
+16. [Configuration](#16-configuration)
+17. [Environment Variables](#17-environment-variables)
+18. [Testing](#18-testing)
+19. [Project Structure](#19-project-structure)
+20. [Design Decisions](#20-design-decisions)
+21. [Known Limitations](#21-known-limitations)
+22. [Planned Development Phases](#22-planned-development-phases)
+23. [Technology Stack](#23-technology-stack)
+24. [Future Work](#24-future-work)
+25. [License](#25-license)
 
 ---
 
@@ -165,9 +167,11 @@ answers expressible.
 
 ## 6. Types of Ambiguity the Project Will Handle
 
-> **Status:** the categories below are defined in the implemented schema
-> ([`AmbiguityType`](src/ambisense/schemas.py)). The **detectors** that will
-> identify them are planned for Phase 2 and are not implemented yet.
+> **Status:** all six categories are defined in the schema
+> ([`AmbiguityType`](src/ambisense/schemas.py)) and each now has a working
+> rule-based **candidate detector** (Phase 2). Those detectors propose
+> candidates only - deciding whether a candidate is a genuine ambiguity, and
+> producing the interpretations, remains planned work for Phase 4.
 
 ### 6.1 Lexical ambiguity
 
@@ -180,9 +184,10 @@ I went to the bank.
 - A financial institution.
 - The sloping land beside a river.
 
-Planned detection signal: words with several distinct WordNet senses for their
-part of speech, filtered against a stoplist of words that are technically
-polysemous but practically unambiguous.
+**Implemented signal** (`ambiguity/lexical.py`): words with several distinct
+WordNet senses for their part of speech, **and** senses spread across several
+distinct WordNet semantic domains, filtered against a stoplist of words that
+are technically polysemous but practically unambiguous.
 
 ### 6.2 Syntactic ambiguity
 
@@ -205,8 +210,10 @@ The old men and women sat outside.
 - Old men, and women of any age.
 - Old men and old women.
 
-Planned detection signal: dependency-parse configurations in which an
-alternative attachment point is structurally available.
+**Implemented signal** (`ambiguity/syntactic.py`): dependency-parse
+configurations in which an alternative attachment point is structurally
+available - specifically, a competing noun lying between the verb and the
+preposition, or a modifier on a coordinated noun.
 
 ### 6.3 Referential ambiguity
 
@@ -219,10 +226,10 @@ John told David that he was late.
 - *he* = John.
 - *he* = David.
 
-Planned detection signal: a pronoun with two or more antecedent candidates that
-survive number and animacy agreement filtering. The groundwork for this exists
-already — the implemented noun-chunk extraction records `is_plural` and
-`is_person` for exactly this purpose.
+**Implemented signal** (`ambiguity/referential.py`): a pronoun with two or
+more antecedent candidates that survive number and animacy agreement
+filtering, using the `is_plural` and `is_animate_candidate` attributes
+recorded during noun-chunk extraction.
 
 ### 6.4 Semantic ambiguity
 
@@ -235,8 +242,10 @@ The chicken is ready to eat.
 - The chicken is about to eat something (chicken = agent).
 - The chicken is ready to be eaten (chicken = patient).
 
-Planned detection signal: argument-structure patterns such as an adjective
-followed by an infinitive whose transitive verb has no expressed object.
+**Implemented signal** (`ambiguity/semantic.py`): an adjective from a
+configured list followed by a to-infinitive whose verb has no expressed
+object, excluding verbs that cannot take an object at all. Noun-noun compounds
+are also flagged, with a lower signal strength.
 
 ### 6.5 Scope ambiguity
 
@@ -249,8 +258,9 @@ Every student didn't submit the assignment.
 - No student submitted it (negation scopes over the quantifier).
 - Not all students submitted it (the quantifier scopes over negation).
 
-Planned detection signal: co-occurrence of a quantifier with negation, or with
-a second quantifier, within one clause.
+**Implemented signal** (`ambiguity/scope.py`): co-occurrence of a quantifier
+with a negation, or with a second quantifier, within the **same clause** -
+verified by walking the dependency tree up to each token's governing verb.
 
 ### 6.6 Pragmatic / contextual ambiguity
 
@@ -263,12 +273,18 @@ Can you open the window?
 - A literal question about physical ability.
 - A polite request to open the window.
 
-Planned detection signal: indirect speech-act patterns, such as a modal
-interrogative with a second-person subject.
+**Implemented signal** (`ambiguity/pragmatic.py`): a modal auxiliary with a
+second-person subject, an action verb (stative verbs excluded) and a question
+mark; or a conventional indirect marker such as "would you mind".
 
 **An honest caveat.** These six categories overlap, and linguists disagree
 about their boundaries. The system is designed to return `unknown` rather than
 force a confident label onto a case it cannot classify.
+
+**A second caveat.** The detectors report *structural possibility*, not
+ambiguity. They are deliberately tuned for high recall and produce false
+positives - see [Known Limitations](#21-known-limitations) for measured
+examples.
 
 ---
 
@@ -284,22 +300,22 @@ flowchart TD
     subgraph BUILT ["Implemented"]
         B["<b>Text Preprocessing</b><br/>Unicode normalisation, length<br/>and language guards<br/><i>preprocessing/cleaner.py</i>"]
         C["<b>Linguistic Analysis</b><br/>tokens, POS, lemmas, dependencies,<br/>entities, noun chunks<br/><i>preprocessing/linguistic.py</i>"]
-        B --> C
+        D["<b>Rule-Based Candidate Detection</b><br/>six detectors + registry, high recall<br/><i>ambiguity/</i>"]
+        B --> C --> D
     end
 
-    C --> D
+    D --> E
 
-    subgraph PLANNED ["Planned - Phases 2 to 6"]
-        D["<b>Rule-Based Ambiguity Detection</b><br/>six detectors, high recall<br/><i>Phase 2</i>"]
+    subgraph PLANNED ["Planned - Phases 3 to 6"]
         E["<b>Semantic Analysis</b><br/>WordNet senses ranked against<br/>context using embeddings<br/><i>Phase 3</i>"]
         F["<b>LLM Reasoning Layer</b><br/>adjudicate, classify, interpret,<br/>explain, rewrite<br/><i>Phase 4</i>"]
         G["<b>Schema Validation and Scoring</b><br/>Pydantic validation, repair retry,<br/>transparent ambiguity score<br/><i>Phase 5</i>"]
         H["<b>Structured Ambiguity Report</b><br/><i>Phase 5</i>"]
         I["<b>User Interface</b><br/>Streamlit<br/><i>Phase 6</i>"]
-        D --> E --> F --> G --> H --> I
+        E --> F --> G --> H --> I
     end
 
-    C -.->|"available today"| J["CLI output<br/>--dump-nlp"]
+    D -.->|"available today"| J["CLI output<br/>--detect-only<br/>--dump-nlp"]
 
     style BUILT fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     style PLANNED fill:#fff8e1,stroke:#f9a825,stroke-width:2px,stroke-dasharray: 6 4
@@ -336,11 +352,12 @@ Phase 5 work.)*
 | Shared Pydantic schemas (all layers) | **Implemented** | `src/ambisense/schemas.py` |
 | Input validation and normalisation | **Implemented** | `src/ambisense/preprocessing/cleaner.py` |
 | spaCy linguistic analysis | **Implemented** | `src/ambisense/preprocessing/linguistic.py` |
-| CLI: `--check-config`, `--dump-nlp` | **Implemented** | `main.py` |
-| Automated tests (47) | **Implemented** | `tests/` |
-| Rule-based ambiguity detectors | *Planned — Phase 2* | — |
-| Detector registry | *Planned — Phase 2* | — |
-| WordNet sense inventory | *Planned — Phase 3* | — |
+| Rule-based ambiguity detectors (6) | **Implemented** | `src/ambisense/ambiguity/` |
+| Detector registry + deduplication | **Implemented** | `src/ambisense/ambiguity/registry.py` |
+| WordNet sense/domain counting | **Implemented** | `src/ambisense/ambiguity/wordnet_support.py` |
+| CLI: `--check-config`, `--dump-nlp`, `--detect-only` | **Implemented** | `main.py` |
+| Automated tests (149) | **Implemented** | `tests/` |
+| WordNet glosses and sense inventory | *Planned — Phase 3* | — |
 | Embeddings / semantic similarity | *Planned — Phase 3* | — |
 | Context-based sense ranking | *Planned — Phase 3* | — |
 | LLM API client and providers | *Planned — Phase 4* | — |
@@ -355,9 +372,9 @@ Phase 5 work.)*
 
 **Note on empty directories.** `app/`, `prompts/`, `docs/`, `data/examples/`
 and `data/evaluation/` exist in the repository but are currently empty. The
-package directories `ambiguity/`, `semantic/`, `llm/`, `llm/providers/`,
-`scoring/` and `evaluation/` contain only an `__init__.py` placeholder. They
-are scaffolding for the phases above, not implemented modules.
+package directories `semantic/`, `llm/`, `llm/providers/`, `scoring/` and
+`evaluation/` contain only an `__init__.py` placeholder. They are scaffolding
+for the phases above, not implemented modules.
 
 ---
 
@@ -487,11 +504,17 @@ much heavier dependency.
 | Noun-chunk extraction | Referential detector — antecedent candidates |
 | Word vectors | Semantic layer — similarity between context and sense glosses |
 
-Two additional attributes are computed per noun chunk, both for the planned
+Two additional attributes are computed per noun chunk, both consumed by the
 referential detector: `is_plural` (from the fine-grained tag and morphological
-features) and `is_person` (from NER labels plus a documented lexicon of role
-nouns such as *manager* and *developer*, since spaCy's NER labels only *named*
-people, not *the manager*).
+features) and `is_animate_candidate` (from NER labels plus a documented lexicon
+of role nouns such as *manager* and *developer*, since spaCy's NER labels only
+*named* people, not *the manager*).
+
+`is_animate_candidate` was called `is_person` until Phase 2. The name was
+changed because the underlying check also accepts `ORG` and `NORP` entities:
+"The company said **it** would release the patch" takes a pronoun, but a
+company is not a person. The detection logic was not altered - only the name,
+so that the referential detector builds on an accurately described field.
 
 #### An illustrative point about why detection is needed
 
@@ -507,7 +530,120 @@ sentence.
 
 ---
 
-## 11. Installation
+## 11. Phase 2 — Rule-Based Ambiguity Detection (Complete)
+
+Phase 2 adds the layer that decides **where to look**. It contains no LLM call,
+no network access and no randomness.
+
+### 11.1 Candidate-generation philosophy
+
+A detector answers one question only:
+
+> Is there a *structural* reason to suspect more than one reading here?
+
+It does **not** answer "is this sentence genuinely ambiguous?". That
+distinction is the core of the design. Consider the parse the system actually
+produces for the telescope sentence:
+
+```
+I saw the man with the telescope.   ->   with -> man
+```
+
+The parser committed to the noun-attachment reading and discarded the other
+one. The ambiguity is invisible *after* parsing, so the detector's job is to
+notice that an alternative attachment was structurally available - regardless
+of which one the parser happened to pick.
+
+### 11.2 The high-recall approach, and why
+
+The detectors are deliberately tuned for **high recall and low precision**.
+They over-flag. The Phase 4 LLM will act as the precision filter.
+
+This is a deliberate composition of two components with opposite error
+profiles:
+
+| Component | Good at | Bad at |
+|---|---|---|
+| Rule-based detectors | Finding every structure that *permits* two readings; deterministic and explainable | Judging whether a reading is plausible to a human |
+| LLM (Phase 4) | Judging plausibility, explaining, rewriting | Reliably noticing structure; will confidently explain ambiguity that is not there |
+
+Neither is adequate alone. Chaining them lets each cover the other's
+characteristic failure.
+
+### 11.3 The six detectors
+
+| Detector | Rule(s) | Signal strength |
+|---|---|---|
+| `lexical` | WordNet sense count **and** semantic-domain spread, minus stoplist, capped per sentence | 0.5 – 1.0 |
+| `syntactic` | PP attachment (competing noun between verb and preposition); coordination scope | 0.75 / 0.65 |
+| `referential` | Pronoun with ≥2 antecedents surviving number and animacy filters | 0.55 – 0.95 |
+| `semantic` | Tough construction (ADJ + to-infinitive with no object); noun-noun compound | 0.70 / 0.35 |
+| `scope` | Quantifier + negation, or two quantifiers, in the **same clause** | 0.80 / 0.60 |
+| `pragmatic` | Modal + second-person subject + action verb + "?"; conventional indirect markers | 0.70 / 0.50 |
+
+Each detector emits zero or more `AmbiguityCandidate` objects carrying a span,
+character offsets, a machine-readable `evidence` dictionary and a
+human-readable `explanation`.
+
+### 11.4 What "signal strength" means
+
+`AmbiguityCandidate.prior` is **the strength of the linguistic evidence**. It
+is *not* a probability that the sentence is ambiguous, and the CLI says so
+explicitly in its output footer.
+
+It is computed deterministically from the rule that fired - for the lexical
+detector, from the sense and domain counts; for the referential detector, from
+how many antecedents survived filtering. It is used to rank candidates and to
+apply the per-sentence cap, and it is passed to the LLM as evidence. A real
+probability would require calibration against labelled data, which is Phase 7
+work and has not been done.
+
+### 11.5 The registry
+
+`DetectorRegistry` reads `config.detectors`, instantiates only the enabled
+detectors, runs them all against the same `LinguisticAnalysis`, and returns a
+deduplicated, deterministically ordered list.
+
+Two behaviours worth noting:
+
+- **A failing detector does not abort the run.** An exception inside one rule
+  is logged and that detector is skipped, so a single bad rule cannot cost the
+  user every other detector's findings. This is covered by a test.
+- **Deduplication merges only identical findings** - same span, same ambiguity
+  type, *and* same rule. Two different ambiguity types on the same span are
+  kept separate, because a word can legitimately be both a lexical and a
+  syntactic candidate, and collapsing them would destroy information the LLM
+  needs. When two detectors agree on one finding, the stronger signal is kept
+  and the other detector is recorded in `evidence["also_detected_by"]`.
+
+### 11.6 Determinism
+
+Identical input produces byte-identical output: detectors run in declaration
+order, and results are sorted by `(position, -strength, type, detector)`, a
+total ordering with no ties left to chance. This matters because the same code
+path will be used by the Phase 7 evaluation, where a non-reproducible result
+would make measured metrics meaningless.
+
+### 11.7 Files added
+
+| File | Purpose |
+|---|---|
+| `ambiguity/base.py` | `Detector` abstract base class, span and dependency-tree helpers |
+| `ambiguity/registry.py` | Config-driven registry, deduplication, deterministic ordering |
+| `ambiguity/wordnet_support.py` | WordNet sense and semantic-domain counting, with graceful degradation |
+| `ambiguity/lexical.py` | Lexical detector |
+| `ambiguity/syntactic.py` | PP-attachment and coordination-scope detector |
+| `ambiguity/referential.py` | Pronoun antecedent detector |
+| `ambiguity/semantic.py` | Tough-construction and noun-compound detector |
+| `ambiguity/scope.py` | Quantifier/negation scope detector |
+| `ambiguity/pragmatic.py` | Indirect speech-act detector |
+
+Detectors receive plain Pydantic models and never import spaCy - the
+Doc-isolation decision from Phase 1 is preserved.
+
+---
+
+## 12. Installation
 
 Tested on Windows 11 with Python 3.13.
 
@@ -586,7 +722,7 @@ the key as missing, which is expected at this stage.
 
 ---
 
-## 12. Current CLI Usage
+## 13. Current CLI Usage
 
 ```
 python main.py [text] [options]
@@ -597,24 +733,33 @@ python main.py [text] [options]
 | `text` | Implemented | Positional argument: the sentence or paragraph to analyse |
 | `-c`, `--context` | Implemented | Optional context; currently analysed and printed alongside the main text |
 | `--dump-nlp` | Implemented | Print the traditional NLP analysis |
+| `--detect-only` | Implemented | Run the rule-based detectors and print candidates. No LLM call |
+| `--show-evidence` | Implemented | With `--detect-only`, print the full evidence for each candidate |
 | `--check-config` | Implemented | Validate configuration and environment, then exit |
 | `--config PATH` | Implemented | Use an alternative `config.yaml` |
 | `--log-level LEVEL` | Implemented | Override the configured logging level |
 
-Running `main.py` with text but **without** `--dump-nlp` currently prints a
-message stating that full analysis is implemented in a later phase, and exits
-with a non-zero status. Full analysis arrives in Phase 5.
+Running `main.py` with text but without `--dump-nlp` or `--detect-only`
+currently prints a message stating that full analysis is implemented in a later
+phase, and exits with a non-zero status. Full analysis, including LLM
+reasoning and the ambiguity score, arrives in Phase 5.
 
 Exit codes: `0` success, `1` user/input error, `2` configuration or setup error.
 
 ---
 
-## 13. Example Commands
+## 14. Example Commands
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --check-config
 
 .\.venv\Scripts\python.exe main.py --dump-nlp "I saw the man with the telescope."
+
+.\.venv\Scripts\python.exe main.py --detect-only "I saw the man with the telescope."
+
+.\.venv\Scripts\python.exe main.py --detect-only "I went to the bank." --show-evidence
+
+.\.venv\Scripts\python.exe main.py --detect-only "Every student didn't submit the assignment."
 
 .\.venv\Scripts\python.exe main.py --dump-nlp "The crane is ready." -c "The crane flew across the lake."
 
@@ -623,7 +768,7 @@ Exit codes: `0` success, `1` user/input error, `2` configuration or setup error.
 
 ---
 
-## 14. Example NLP Output
+## 15. Example NLP Output
 
 Actual output of:
 
@@ -688,7 +833,70 @@ Phase 2 and Phase 4 work.
 
 ---
 
-## 15. Configuration
+### Rule-based detection output
+
+Actual output of:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --detect-only "The chicken is ready to eat."
+```
+
+```text
+======================================================================
+AmbiSense - Rule-Based Detection (Phase 2)
+======================================================================
+
+Input:
+  The chicken is ready to eat.
+
+Detectors run: lexical, syntactic, referential, semantic, scope, pragmatic
+Candidates:    3
+
+----------------------------------------------------------------------
+[1] LEXICAL   (detector: lexical, signal strength: 0.50)
+
+  Span:
+    'chicken' [chars 4-11]
+
+  Reason:
+    'chicken' has 4 WordNet senses as a noun, spanning 4 semantic
+    domains (animal, event, food, person). Several distinct meanings
+    are therefore available in principle.
+
+----------------------------------------------------------------------
+[2] SEMANTIC   (detector: semantic, signal strength: 0.70)
+
+  Span:
+    'ready to eat' [chars 15-27]
+
+  Reason:
+    In 'ready to eat', the verb 'eat' has no object, so 'chicken'
+    can be read as either the one performing 'eat' or the one it is
+    performed on.
+
+----------------------------------------------------------------------
+[3] LEXICAL   (detector: lexical, signal strength: 0.50)
+    ...
+
+======================================================================
+Note: 'signal strength' is the strength of the linguistic evidence,
+NOT a probability that the text is ambiguous. Confirming genuine
+ambiguity is the job of the LLM layer (Phase 4).
+======================================================================
+```
+
+Three candidates from two detectors, and the sentence is a good illustration of
+the layer's character: candidate [2] is the interesting one, while [1] and [3]
+are the lexical detector doing its high-recall job on ordinary words. Filtering
+those is Phase 4's responsibility, not this layer's.
+
+Adding `--show-evidence` prints the full machine-readable evidence dictionary
+for each candidate - the same structure that will be serialised into the LLM
+prompt in Phase 4.
+
+---
+
+## 16. Configuration
 
 All configuration lives in `config/config.yaml`. The sections are:
 
@@ -697,7 +905,7 @@ All configuration lives in `config/config.yaml`. The sections are:
 | `llm` | Read and validated; not used | Provider, model, base URL, temperature, max tokens, timeout, retries, caching |
 | `nlp` | **In use** | Language, spaCy model, input length guards, ASCII ratio threshold |
 | `embeddings` | Read and validated; not used | Backend selection (`spacy` or `sentence_transformers`) |
-| `detectors` | Read and validated; not used | Per-detector on/off switches and their thresholds |
+| `detectors` | **In use** | Per-detector on/off switches and their thresholds |
 | `semantic_analysis` | Read and validated; not used | Sense-ranking parameters |
 | `scoring` | Read and validated; not used | Score weights and thresholds |
 | `output` | Read and validated; not used | Degraded-mode and evidence-inclusion switches |
@@ -716,7 +924,7 @@ intended to require changing only `provider`, `model` and `base_url`.
 
 ---
 
-## 16. Environment Variables
+## 17. Environment Variables
 
 Secrets are never stored in `config.yaml` or in source code. Copy
 `.env.example` to `.env` and fill it in; `.env` is git-ignored.
@@ -734,46 +942,64 @@ demonstration without editing the YAML file.
 
 ---
 
-## 17. Testing
+## 18. Testing
 
-The current implementation has **47 automated tests**, all passing.
+The current implementation has **149 automated tests**, all passing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ```text
-47 passed
+149 passed
 ```
 
-**Scope of these tests.** They cover the foundation and NLP layer only —
-specifically:
+**Scope of these tests.** They cover the foundation, the NLP layer and the
+rule-based detection layer:
 
 - `tests/test_schemas.py` — type and verdict coercion, confidence clamping,
   rewrite-list cleaning, and validation of a well-formed and an empty LLM
   payload against the schema.
+- `tests/test_config.py` — the shipped `config.yaml` loads and satisfies every
+  consistency rule; malformed, non-mapping and inconsistent configurations are
+  rejected with clear messages; the API key never appears in a serialised
+  config.
 - `tests/test_preprocessing.py` — Unicode normalisation, every input guard,
   spaCy annotation correctness, sentence segmentation, character-offset
-  integrity, the person heuristic, entity extraction and dependency-tree
+  integrity, the animacy heuristic, entity extraction and dependency-tree
   traversal.
+- `tests/test_detectors.py` — each of the six detectors on its canonical
+  example *and* on negative controls; WordNet support; registry behaviour with
+  detectors disabled; deduplication rules; determinism; span/offset integrity;
+  JSON serialisability of evidence; and traversal helpers on a deliberately
+  malformed (cyclic) parse.
 
-They do **not** test ambiguity detection, semantic analysis, LLM integration,
-scoring, the interface or evaluation, because none of those exist yet.
+They do **not** test semantic similarity, LLM integration, scoring, the
+interface or evaluation, because none of those exist yet.
 
 **No test makes an API call.** The LLM-contract tests validate the schema
 against hand-written payloads, so the suite runs offline, costs nothing and is
 deterministic. This is a deliberate property to preserve as later phases add
 the API client.
 
-One bug was found and fixed by these tests during development: a confidence
-value of `1.4` returned by a model was being interpreted as "1.4 percent" and
-collapsed to `0.014`, turning a confident answer into a near-zero one. The
-percentage heuristic now requires a documented floor before treating a number
-as a percentage.
+Two issues were found by these tests during development:
+
+1. A confidence value of `1.4` returned by a model was being interpreted as
+   "1.4 percent" and collapsed to `0.014`, turning a confident answer into a
+   near-zero one. The percentage heuristic now requires a documented floor
+   before treating a number as a percentage.
+2. A test asserting that *"She bought three apples at the market."* produces no
+   structural candidate **failed** - correctly. `[the apples at the market]` is
+   a structurally available noun phrase, so the rule is right and the
+   expectation was wrong. Rather than weaken the rule, the case was turned into
+   `test_known_false_positive_verb_object_pp`, which *asserts the false
+   positive still occurs* and explains why. If a future change makes the
+   syntactic rule narrower, that test will fail and prompt a check that the
+   telescope sentence still fires.
 
 ---
 
-## 18. Project Structure
+## 19. Project Structure
 
 This is the **actual** current contents of the repository. Empty directories
 and placeholder `__init__.py` files are marked as such.
@@ -803,8 +1029,17 @@ NLP based ambiguity detector/
 │       │   ├── cleaner.py               # Validation and normalisation
 │       │   └── linguistic.py            # spaCy analysis layer
 │       │
-│       ├── ambiguity/
-│       │   └── __init__.py              # (placeholder - Phase 2)
+│       ├── ambiguity/                   # Phase 2 - rule-based detection
+│       │   ├── __init__.py
+│       │   ├── base.py                  # Detector ABC + span/tree helpers
+│       │   ├── registry.py              # Config-driven registry + dedup
+│       │   ├── wordnet_support.py       # WordNet sense/domain counting
+│       │   ├── lexical.py
+│       │   ├── syntactic.py
+│       │   ├── referential.py
+│       │   ├── semantic.py
+│       │   ├── scope.py
+│       │   └── pragmatic.py
 │       ├── semantic/
 │       │   └── __init__.py              # (placeholder - Phase 3)
 │       ├── llm/
@@ -818,8 +1053,10 @@ NLP based ambiguity detector/
 │
 ├── tests/
 │   ├── __init__.py
-│   ├── test_schemas.py                  # 
-│   └── test_preprocessing.py            # 47 tests in total
+│   ├── test_schemas.py
+│   ├── test_config.py
+│   ├── test_preprocessing.py
+│   └── test_detectors.py                # 149 tests in total
 │
 ├── app/                                 # (empty - Phase 6)
 ├── prompts/                             # (empty - Phase 4)
@@ -836,12 +1073,6 @@ Files expected to be added in later phases:
 ```
 src/ambisense/
 ├── pipeline.py                          # Phase 5 - orchestrator
-├── ambiguity/
-│   ├── base.py                          # Phase 2 - detector protocol
-│   ├── registry.py                      # Phase 2 - config-driven registry
-│   ├── lexical.py, syntactic.py,        # Phase 2 - the six detectors
-│   ├── referential.py, semantic.py,
-│   ├── scope.py, pragmatic.py
 ├── semantic/
 │   ├── wordnet_senses.py                # Phase 3
 │   ├── embeddings.py                    # Phase 3
@@ -871,7 +1102,7 @@ data/evaluation/gold_set.jsonl           # Phase 7
 
 ---
 
-## 19. Design Decisions
+## 20. Design Decisions
 
 ### 19.1 spaCy `Doc` objects do not leave the preprocessing layer
 
@@ -927,12 +1158,33 @@ verification system.
 
 ---
 
-## 20. Known Limitations
+## 21. Known Limitations
 
 ### Limitations of the current implementation
 
-- **No ambiguity detection exists yet.** The system currently describes
-  sentences; it does not analyse them for ambiguity.
+- **Candidates are not findings.** The detectors report where structure
+  *permits* a second reading. Nothing yet decides whether an ambiguity is
+  genuine, produces interpretations, or suggests rewrites.
+- **The lexical detector over-fires, by design.** WordNet is very
+  fine-grained: `cat` has 8 noun senses and `mat` has 7, so "The cat sat on
+  the mat." still yields two lexical candidates. Requiring semantic-domain
+  spread and capping candidates per sentence reduces this but does not remove
+  it. No purely count-based WordNet rule cleanly separates true homonymy from
+  ordinary polysemy.
+- **The syntactic rule reports structural possibility, not plausibility.**
+  "She bought three apples at the market." is flagged, because
+  `[the apples at the market]` is a well-formed noun phrase. A human reads it
+  one way; the rule cannot. This is documented by a test.
+- **Antecedent detection is not coreference resolution.** The referential
+  detector filters candidates by number and animacy and reports when more than
+  one survives. It never decides which is correct, and it has no model of
+  discourse salience, binding theory or world knowledge.
+- **Detector coverage within each type is partial.** Each detector implements
+  one or two clear rules, not the full range of its ambiguity type. Garden-path
+  sentences, ellipsis and many scope configurations are not covered.
+- **Rules are tuned on a small set of textbook examples**, not on a corpus.
+  Whether the thresholds generalise is an open question that Phase 7 exists to
+  answer.
 - **The language guard is a heuristic, not language identification.** It
   measures the proportion of ASCII alphabetic characters. Romanised text in
   another language — for example Hindi written in Latin script — will pass the
@@ -973,27 +1225,28 @@ run, and no metrics exist yet.
 
 ---
 
-## 21. Planned Development Phases
+## 22. Planned Development Phases
 
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Foundation — packaging, configuration, logging | **Complete** |
 | 1 | Schemas and NLP layer | **Complete** |
-| 2 | Rule-based ambiguity detection — six detectors plus registry | **Next** |
-| 3 | Semantic analysis — WordNet senses, embeddings, context-based sense ranking | Planned |
+| 2 | Rule-based ambiguity detection — six detectors plus registry | **Complete** |
+| 3 | Semantic analysis — WordNet senses, embeddings, context-based sense ranking | **Next** |
 | 4 | LLM integration — prompt files, provider-agnostic client, structured output validation and repair | Planned |
 | 5 | Context-aware reasoning and ambiguity scoring — pipeline orchestrator, transparent score, degraded mode | Planned |
 | 6 | User interface — Streamlit application with span highlighting and demo examples | Planned |
 | 7 | Evaluation — labelled dataset, accuracy/precision/recall/F1, manual review of explanations and rewrites | Planned |
 | 8 | Documentation, testing and final polish | Planned |
 
-Phase 2 is the next piece of work. It will add the detector protocol, the six
-detectors, a configuration-driven registry, a `--detect-only` CLI mode and unit
-tests for each detector.
+Phase 3 is the next piece of work. It will add WordNet gloss retrieval,
+an embedding backend built on the `en_core_web_md` vectors, and context-based
+sense ranking - the feature that will let the system explain why
+"The crane flew across the lake." favours the bird reading of *crane*.
 
 ---
 
-## 22. Technology Stack
+## 23. Technology Stack
 
 ### Currently used
 
@@ -1005,13 +1258,13 @@ tests for each detector.
 | Pydantic | 2.x | Typed models, validation, serialisation |
 | PyYAML | 6.x | Configuration parsing |
 | python-dotenv | 1.x | Loading secrets from `.env` |
+| NLTK (WordNet) | 3.10.x | Sense counts and semantic-domain spread for the lexical detector |
 | pytest | 9.x | Test framework |
 
 ### Installed, reserved for later phases
 
 | Technology | Intended role | Phase |
 |---|---|---|
-| NLTK (WordNet) | Word-sense inventory and glosses | 3 |
 | NumPy | Cosine similarity for sense ranking | 3 |
 | httpx | HTTP transport for the LLM API | 4 |
 | scikit-learn | Evaluation metrics | 7 |
@@ -1031,7 +1284,7 @@ tests for each detector.
 
 ---
 
-## 23. Future Work
+## 24. Future Work
 
 Beyond the eight planned phases, the following would be reasonable extensions
 and are **not** part of this submission:
@@ -1052,7 +1305,7 @@ and are **not** part of this submission:
 
 ---
 
-## 24. License
+## 25. License
 
 This project is submitted as academic coursework.
 
