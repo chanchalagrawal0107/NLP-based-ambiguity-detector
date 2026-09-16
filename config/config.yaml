@@ -1,0 +1,127 @@
+# ===========================================================================
+# AmbiSense - central configuration
+# ---------------------------------------------------------------------------
+# Every tunable value lives here.  No thresholds, model names or magic numbers
+# are hard-coded in the source.  Secrets (API keys) live in `.env`, never here.
+# ===========================================================================
+
+llm:
+  # Which provider adapter to use: groq | openai | anthropic | gemini | ollama
+  # groq/openai/gemini/ollama all share the OpenAI-compatible adapter.
+  provider: groq
+  model: llama-3.3-70b-versatile
+  # Base URL for OpenAI-compatible providers. Change this one line to switch
+  # between Groq / OpenAI / Gemini-compat / a local Ollama server.
+  base_url: https://api.groq.com/openai/v1
+  temperature: 0.1          # low: we want stable, reproducible analysis
+  max_tokens: 2000
+  timeout_seconds: 45
+  max_retries: 3
+  retry_backoff_seconds: 2.0
+  # Ask the provider for guaranteed-JSON output where supported.
+  request_json_mode: true
+  # Cache identical requests on disk so repeated demos cost nothing.
+  enable_cache: true
+  cache_dir: data/cache
+
+nlp:
+  language: en
+  spacy_model: en_core_web_md
+  # Hard input guards (see preprocessing/cleaner.py)
+  min_input_length: 3
+  max_input_length: 2000
+  max_context_length: 2000
+  max_sentences: 10
+  # Fraction of ASCII-letter characters below which we refuse the input as
+  # probably non-English / not natural language.
+  min_ascii_ratio: 0.85
+
+embeddings:
+  # Backend for semantic similarity: spacy | sentence_transformers
+  backend: spacy
+  # Only used when backend == sentence_transformers
+  sentence_transformer_model: all-MiniLM-L6-v2
+
+detectors:
+  # Master switches - lets you demo one detector at a time in the viva.
+  lexical: true
+  syntactic: true
+  referential: true
+  semantic: true
+  scope: true
+  pragmatic: true
+
+  lexical_settings:
+    # A word must have at least this many WordNet senses for its POS to be a
+    # lexical-ambiguity candidate.
+    min_senses: 3
+    # Only these coarse POS tags are considered.
+    allowed_pos: [NOUN, VERB, ADJ, ADV]
+    # Words that are technically polysemous but practically unambiguous.
+    # Filtering these is what keeps precision from collapsing.
+    stoplist: [be, have, do, get, make, take, go, come, give, say, know,
+               thing, way, time, year, day, people, man, woman, use, work,
+               good, new, first, last, long, great, little, own, other]
+    min_word_length: 3
+
+  syntactic_settings:
+    # Prepositions that commonly create attachment ambiguity.
+    attachment_prepositions: [with, in, on, at, from, by, near, under, over,
+                              through, behind, beside]
+    detect_pp_attachment: true
+    detect_coordination_scope: true
+    detect_relative_clause: true
+
+  referential_settings:
+    # Pronouns we attempt to resolve.
+    pronouns: [he, she, it, they, him, her, them, his, hers, their, theirs, this, that]
+    # How many preceding sentences to search for antecedents.
+    antecedent_window_sentences: 2
+    # At least this many surviving candidates makes it ambiguous.
+    min_candidates: 2
+
+  scope_settings:
+    quantifiers: [every, all, each, some, any, no, none, many, few, most, several]
+    negations: [not, "n't", never, no, none, nobody, nothing]
+
+  pragmatic_settings:
+    # Modal + 2nd person interrogative => possible indirect speech act.
+    request_modals: [can, could, would, will, might]
+    indirect_markers: ["do you know", "is it possible", "would you mind",
+                       "have you got", "i wonder"]
+
+semantic_analysis:
+  # Context-based word-sense ranking (the "crane" feature).
+  enable_context_sense_ranking: true
+  max_senses_considered: 8
+  # If the top sense beats the runner-up by more than this cosine margin,
+  # we treat the context as having resolved the ambiguity.
+  sense_resolution_margin: 0.08
+  # Minimum similarity for a sense to be reported at all.
+  min_sense_similarity: 0.15
+
+scoring:
+  # Weights for the transparent ambiguity score (must sum to 1.0).
+  # See docs/ARCHITECTURE.md for the rationale behind each weight.
+  weights:
+    llm_confidence: 0.45        # how sure the LLM is the ambiguity is genuine
+    detector_evidence: 0.25     # strength of the structural NLP evidence
+    interpretation_count: 0.15  # more plausible readings => more ambiguous
+    context_uncertainty: 0.15   # context failing to disambiguate raises score
+  # Score at or above this is reported as "ambiguous".
+  ambiguity_threshold: 0.45
+  # Candidates the LLM rates below this confidence are discarded.
+  confidence_threshold: 0.35
+  # Diminishing-returns cap used when normalising interpretation counts.
+  max_interpretations_for_score: 4
+
+output:
+  # Degrade to an NLP-only report instead of crashing when the LLM is
+  # unavailable (no API key, timeout, rate limit, repeated bad JSON).
+  allow_degraded_mode: true
+  include_nlp_evidence_in_report: true
+
+logging:
+  level: INFO
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  date_format: "%H:%M:%S"

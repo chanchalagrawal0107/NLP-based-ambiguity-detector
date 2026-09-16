@@ -1,0 +1,23 @@
+# --- Core NLP ---
+spacy>=3.8.2,<4.0.0
+nltk>=3.9.1
+
+# --- Semantic similarity (spaCy md vectors; numpy for cosine) ---
+numpy>=1.26
+
+# --- Structured output & configuration ---
+pydantic>=2.9
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# --- LLM transport (provider-agnostic HTTP) ---
+httpx>=0.27
+
+# --- Evaluation ---
+scikit-learn>=1.5
+
+# --- User interface ---
+streamlit>=1.38
+
+# --- Tests ---
+pytest>=8.0
