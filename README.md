@@ -1,11 +1,12 @@
 # AmbiSense — NLP-Based Ambiguity Detection and Resolution System
 
-> **Status: Work in progress (Phase 2 of 8 complete).**
+> **Status: Work in progress (Phase 3 of 8 complete).**
 > This repository currently contains the configuration foundation, the
-> traditional NLP analysis layer, and the rule-based ambiguity **candidate**
-> detection layer. The semantic similarity layer, LLM integration, ambiguity
-> scoring, the web interface and evaluation are **not implemented yet** and are
-> clearly marked as planned throughout this document.
+> traditional NLP analysis layer, the rule-based ambiguity **candidate**
+> detection layer, and the context-based WordNet sense-ranking layer. LLM
+> integration, ambiguity scoring, the web interface and evaluation are **not
+> implemented yet** and are clearly marked as planned throughout this
+> document.
 
 ---
 
@@ -22,20 +23,21 @@
 9. [Phase 0 — Foundation](#9-phase-0--foundation-complete)
 10. [Phase 1 — Schemas and NLP Layer](#10-phase-1--schemas-and-nlp-layer-complete)
 11. [Phase 2 — Rule-Based Ambiguity Detection](#11-phase-2--rule-based-ambiguity-detection-complete)
-12. [Installation](#12-installation)
-13. [Current CLI Usage](#13-current-cli-usage)
-14. [Example Commands](#14-example-commands)
-15. [Example NLP Output](#15-example-nlp-output)
-16. [Configuration](#16-configuration)
-17. [Environment Variables](#17-environment-variables)
-18. [Testing](#18-testing)
-19. [Project Structure](#19-project-structure)
-20. [Design Decisions](#20-design-decisions)
-21. [Known Limitations](#21-known-limitations)
-22. [Planned Development Phases](#22-planned-development-phases)
-23. [Technology Stack](#23-technology-stack)
-24. [Future Work](#24-future-work)
-25. [License](#25-license)
+12. [Phase 3 — Semantic Analysis](#12-phase-3--semantic-analysis-complete)
+13. [Installation](#13-installation)
+14. [Current CLI Usage](#14-current-cli-usage)
+15. [Example Commands](#15-example-commands)
+16. [Example NLP Output](#16-example-nlp-output)
+17. [Configuration](#17-configuration)
+18. [Environment Variables](#18-environment-variables)
+19. [Testing](#19-testing)
+20. [Project Structure](#20-project-structure)
+21. [Design Decisions](#21-design-decisions)
+22. [Known Limitations](#22-known-limitations)
+23. [Planned Development Phases](#23-planned-development-phases)
+24. [Technology Stack](#24-technology-stack)
+25. [Future Work](#25-future-work)
+26. [License](#26-license)
 
 ---
 
@@ -55,10 +57,11 @@ analysis answers *"where in this sentence is there a structural reason to
 suspect more than one reading?"* The LLM answers *"is that reading actually
 available to a human reader, and how would you phrase it unambiguously?"*
 
-**What exists today** is the first half of the foundation: configuration
-management, input validation, and a spaCy-based linguistic analysis layer that
-produces structured, serialisable evidence. Everything downstream of that is
-planned work described in [Section 21](#21-planned-development-phases).
+**What exists today** is the whole evidence-gathering half of that pipeline:
+configuration management, input validation, spaCy linguistic analysis,
+rule-based candidate detection, and context-based WordNet sense ranking. What
+remains is the reasoning half - the LLM adjudication layer and everything after
+it - described in [Section 23](#23-planned-development-phases).
 
 ---
 
@@ -125,9 +128,9 @@ lets each component compensate for the other's characteristic failure mode.
 2. Extract observable linguistic evidence — POS tags, dependency relations,
    named entities, noun phrases — using established NLP tooling.
 3. Implement rule-based detectors for the six ambiguity types listed below.
-   *(Planned — Phase 2.)*
+   *(Implemented — Phase 2.)*
 4. Use word-sense information and embeddings to analyse whether supplied
-   context favours one reading. *(Planned — Phase 3.)*
+   context favours one reading. *(Implemented — Phase 3.)*
 5. Integrate an LLM through an API so that it reasons over the NLP evidence
    rather than over the raw sentence alone. *(Planned — Phase 4.)*
 6. Enforce a strict, validated output schema instead of accepting free-form
@@ -283,7 +286,7 @@ force a confident label onto a case it cannot classify.
 
 **A second caveat.** The detectors report *structural possibility*, not
 ambiguity. They are deliberately tuned for high recall and produce false
-positives - see [Known Limitations](#21-known-limitations) for measured
+positives - see [Known Limitations](#22-known-limitations) for measured
 examples.
 
 ---
@@ -301,21 +304,21 @@ flowchart TD
         B["<b>Text Preprocessing</b><br/>Unicode normalisation, length<br/>and language guards<br/><i>preprocessing/cleaner.py</i>"]
         C["<b>Linguistic Analysis</b><br/>tokens, POS, lemmas, dependencies,<br/>entities, noun chunks<br/><i>preprocessing/linguistic.py</i>"]
         D["<b>Rule-Based Candidate Detection</b><br/>six detectors + registry, high recall<br/><i>ambiguity/</i>"]
-        B --> C --> D
+        E["<b>Semantic Analysis</b><br/>WordNet senses ranked against<br/>context by cosine similarity<br/><i>semantic/</i>"]
+        B --> C --> D --> E
     end
 
-    D --> E
+    E --> F
 
-    subgraph PLANNED ["Planned - Phases 3 to 6"]
-        E["<b>Semantic Analysis</b><br/>WordNet senses ranked against<br/>context using embeddings<br/><i>Phase 3</i>"]
+    subgraph PLANNED ["Planned - Phases 4 to 6"]
         F["<b>LLM Reasoning Layer</b><br/>adjudicate, classify, interpret,<br/>explain, rewrite<br/><i>Phase 4</i>"]
         G["<b>Schema Validation and Scoring</b><br/>Pydantic validation, repair retry,<br/>transparent ambiguity score<br/><i>Phase 5</i>"]
         H["<b>Structured Ambiguity Report</b><br/><i>Phase 5</i>"]
         I["<b>User Interface</b><br/>Streamlit<br/><i>Phase 6</i>"]
-        E --> F --> G --> H --> I
+        F --> G --> H --> I
     end
 
-    D -.->|"available today"| J["CLI output<br/>--detect-only<br/>--dump-nlp"]
+    E -.->|"available today"| J["CLI output<br/>--dump-nlp<br/>--detect-only<br/>--analyze-semantics"]
 
     style BUILT fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     style PLANNED fill:#fff8e1,stroke:#f9a825,stroke-width:2px,stroke-dasharray: 6 4
@@ -355,11 +358,11 @@ Phase 5 work.)*
 | Rule-based ambiguity detectors (6) | **Implemented** | `src/ambisense/ambiguity/` |
 | Detector registry + deduplication | **Implemented** | `src/ambisense/ambiguity/registry.py` |
 | WordNet sense/domain counting | **Implemented** | `src/ambisense/ambiguity/wordnet_support.py` |
-| CLI: `--check-config`, `--dump-nlp`, `--detect-only` | **Implemented** | `main.py` |
-| Automated tests (149) | **Implemented** | `tests/` |
-| WordNet glosses and sense inventory | *Planned — Phase 3* | — |
-| Embeddings / semantic similarity | *Planned — Phase 3* | — |
-| Context-based sense ranking | *Planned — Phase 3* | — |
+| WordNet glosses and sense retrieval | **Implemented** | `src/ambisense/semantic/wordnet_senses.py` |
+| Embeddings / cosine similarity | **Implemented** | `src/ambisense/semantic/embeddings.py` |
+| Context-based sense ranking | **Implemented** | `src/ambisense/semantic/context_resolver.py` |
+| CLI: `--check-config`, `--dump-nlp`, `--detect-only`, `--analyze-semantics` | **Implemented** | `main.py` |
+| Automated tests (197) | **Implemented** | `tests/` |
 | LLM API client and providers | *Planned — Phase 4* | — |
 | Prompt files | *Planned — Phase 4* | — |
 | Structured LLM reasoning and repair retry | *Planned — Phase 4* | — |
@@ -372,9 +375,9 @@ Phase 5 work.)*
 
 **Note on empty directories.** `app/`, `prompts/`, `docs/`, `data/examples/`
 and `data/evaluation/` exist in the repository but are currently empty. The
-package directories `semantic/`, `llm/`, `llm/providers/`, `scoring/` and
-`evaluation/` contain only an `__init__.py` placeholder. They are scaffolding
-for the phases above, not implemented modules.
+package directories `llm/`, `llm/providers/`, `scoring/` and `evaluation/`
+contain only an `__init__.py` placeholder. They are scaffolding for the phases
+above, not implemented modules.
 
 ---
 
@@ -643,7 +646,158 @@ Doc-isolation decision from Phase 1 is preserved.
 
 ---
 
-## 12. Installation
+## 12. Phase 3 — Semantic Analysis (Complete)
+
+Phase 2 answers *where* to look. Phase 3 asks a narrower question about lexical
+candidates specifically:
+
+> Given the words around it, which of this word's dictionary senses best
+> matches the context?
+
+### 12.1 Why Phase 2 alone is not enough
+
+The lexical detector flags `bank` in "I deposited money at the bank." because
+WordNet records ten noun senses spread over five semantic domains. That is all
+it can say. It has no way to notice that *deposited* and *money* are sitting
+right next to it. Phase 3 adds exactly that.
+
+### 12.2 The method
+
+```mermaid
+flowchart LR
+    A["Lexical candidate<br/>'bank'"] --> B["Retrieve WordNet senses<br/>for lemma + POS"]
+    B --> C["Gloss text per sense<br/>definition + examples"]
+    A --> D["Context words<br/>from existing analysis"]
+    C --> E["Gloss vector<br/>mean of word vectors"]
+    D --> F["Context vector<br/>mean of word vectors"]
+    E --> G["Cosine similarity"]
+    F --> G
+    G --> H["Ranked SenseRanking<br/>+ margin + status"]
+```
+
+**Sense retrieval.** Senses are fetched for the token's lemma *and its part of
+speech*, so the verb "to bank" never contaminates the analysis of the noun
+"bank". WordNet orders senses roughly by frequency, so the configured cap keeps
+common readings and drops the obscure tail.
+
+**Gloss representation.** Each sense is represented by its definition plus its
+WordNet usage examples. This choice was measured, not assumed:
+
+| Gloss contents | Rank of the financial sense for "I deposited money at the bank." |
+|---|---|
+| definition only | 4th |
+| definition + examples | **1st** |
+| definition + examples + lemma names | 3rd |
+
+WordNet's examples are short snippets of real usage, which is precisely the
+kind of context the comparison needs. Lemma names hurt, because near-synonyms
+such as "savings bank" pull unrelated senses towards the context. Both options
+remain configurable so the effect can be demonstrated rather than asserted.
+
+**Context representation.** Content words (noun, verb, adjective, adverb,
+proper noun) from the target's own sentence, plus the user-supplied context
+passage when one is given. Function words and punctuation are excluded as
+noise. The target word itself is excluded, because it would contribute the
+same vector to every comparison and only dilute the differences between senses.
+
+Context words are taken from the existing `LinguisticAnalysis` - **the sentence
+is never parsed twice**.
+
+**Similarity.** Both sides are represented by the mean of their word vectors
+from `en_core_web_md`, and compared with cosine similarity. Nothing is trained
+and nothing is random, so the result is fully deterministic.
+
+### 12.3 Measured results
+
+| Sentence | Top-ranked sense | Correct? |
+|---|---|---|
+| I deposited money at the bank. | `depository_financial_institution.n.01` — "a financial institution that accepts deposits…" | Yes |
+| The fisherman sat on the bank of the river. | `bank.n.01` — "sloping land (especially the slope beside a body of water)" | Yes |
+| The crane flew across the lake. | `crane.n.05` — "large long-necked wading bird…" | Yes |
+| The crane lifted the heavy container. | `crane.n.05` — the **bird** again | **No** |
+
+The last row is a real failure and is documented rather than tuned away. The
+machine sense of *crane* has a short gloss ("lifts and moves heavy objects…"),
+while the bird gloss is longer and full of generic words whose vectors sit near
+the centre of the vector space, so its average lands closer to almost anything.
+Averaged static vectors are simply not sharp enough here.
+
+Worse, the system reports `resolved_by_context = true` for that wrong answer,
+because the margin over the runner-up exceeds the configured threshold. **The
+layer can be confidently wrong.** That is precisely why its output is labelled
+evidence and handed to a later reasoning layer rather than treated as an answer.
+
+What the context *does* reliably change is the machine sense's similarity
+score, which rises substantially between the two crane sentences. The test
+suite asserts that weaker, true claim rather than a stronger, false one.
+
+### 12.4 Similarity is not probability
+
+A score of `0.72` means the angle between two 300-dimensional averaged vectors
+has a cosine of 0.72. It does **not** mean a 72% chance the word carries that
+sense. Nothing here is calibrated against labelled data, and the scores do not
+form a probability distribution - they do not sum to 1 and can be negative.
+
+The CLI prints this caveat under every result, and the wording of the generated
+note is constrained to phrases such as "has the highest contextual similarity"
+and "the context favours this reading" — never "means".
+
+### 12.5 When analysis is not possible
+
+Phase 3 never manufactures a score. `SenseRanking.status` reports why instead:
+
+| Status | Cause |
+|---|---|
+| `ranked` | Similarities computed normally |
+| `no_senses_found` | WordNet holds no senses for that lemma and POS |
+| `no_usable_context_vector` | No surrounding content word has a vector |
+| `no_usable_gloss_vectors` | No retrieved gloss has a usable vector |
+| `wordnet_unavailable` | The corpus is not installed |
+| `disabled` | Turned off in configuration |
+
+A zero vector is treated as *absent*, not as similarity 0.0: a zero vector has
+no direction, so the angle is undefined, and reporting 0.0 would be inventing a
+number. `cosine_similarity` returns `None` in that case, and there is a test for
+each of these paths.
+
+### 12.6 Scope: lexical candidates only
+
+Sense ranking is applied **only** to lexical candidates. WordNet senses say
+nothing useful about a prepositional-phrase attachment, an unresolved pronoun
+or a quantifier's scope, so running it on those would produce evidence that
+looks meaningful and is not.
+
+Note also that `ambiguity/semantic.py` (the Phase 2 *detector* for
+semantic-role ambiguity, "ready to eat") and `semantic/` (this Phase 3
+*analysis layer*) share a word but are unrelated components.
+
+### 12.7 Caching
+
+Three caches, each with a stated reason:
+
+- `retrieve_senses` — `lru_cache`, because sentences and evaluation runs repeat
+  lemmas. Returns an immutable tuple, so the cached value cannot be mutated.
+- `SpacyEmbeddingBackend._gloss_cache` — a plain dict on the instance. One
+  analysis compares a single context against several glosses, and demos re-run
+  the same sentences; without it every gloss is re-tokenised each time.
+- The spaCy pipeline itself is reused from `LinguisticAnalyzer`, so **no second
+  model is loaded** for the semantic layer.
+
+### 12.8 Files added
+
+| File | Purpose |
+|---|---|
+| `semantic/wordnet_senses.py` | Sense retrieval with glosses, examples and lemma names |
+| `semantic/embeddings.py` | Vector backend protocol, spaCy backend, cosine similarity |
+| `semantic/context_resolver.py` | `SemanticAnalyzer` - context construction, scoring, ranking |
+
+The embedding backend is declared as a `Protocol`, so tests inject a tiny
+deterministic fake and exercise all ranking and failure logic without loading
+spaCy at all.
+
+---
+
+## 13. Installation
 
 Tested on Windows 11 with Python 3.13.
 
@@ -722,7 +876,7 @@ the key as missing, which is expected at this stage.
 
 ---
 
-## 13. Current CLI Usage
+## 14. Current CLI Usage
 
 ```
 python main.py [text] [options]
@@ -735,20 +889,21 @@ python main.py [text] [options]
 | `--dump-nlp` | Implemented | Print the traditional NLP analysis |
 | `--detect-only` | Implemented | Run the rule-based detectors and print candidates. No LLM call |
 | `--show-evidence` | Implemented | With `--detect-only`, print the full evidence for each candidate |
+| `--analyze-semantics` | Implemented | Rank each lexical candidate's WordNet senses against the context. No LLM call |
 | `--check-config` | Implemented | Validate configuration and environment, then exit |
 | `--config PATH` | Implemented | Use an alternative `config.yaml` |
 | `--log-level LEVEL` | Implemented | Override the configured logging level |
 
-Running `main.py` with text but without `--dump-nlp` or `--detect-only`
-currently prints a message stating that full analysis is implemented in a later
-phase, and exits with a non-zero status. Full analysis, including LLM
+Running `main.py` with text but without `--dump-nlp`, `--detect-only` or
+`--analyze-semantics` currently prints a message stating that full analysis is
+implemented in a later phase, and exits with a non-zero status. Full analysis, including LLM
 reasoning and the ambiguity score, arrives in Phase 5.
 
 Exit codes: `0` success, `1` user/input error, `2` configuration or setup error.
 
 ---
 
-## 14. Example Commands
+## 15. Example Commands
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --check-config
@@ -761,6 +916,12 @@ Exit codes: `0` success, `1` user/input error, `2` configuration or setup error.
 
 .\.venv\Scripts\python.exe main.py --detect-only "Every student didn't submit the assignment."
 
+.\.venv\Scripts\python.exe main.py --analyze-semantics "I deposited money at the bank."
+
+.\.venv\Scripts\python.exe main.py --analyze-semantics "The fisherman sat on the bank of the river."
+
+.\.venv\Scripts\python.exe main.py --analyze-semantics "The crane is ready." -c "The crane flew across the lake."
+
 .\.venv\Scripts\python.exe main.py --dump-nlp "The crane is ready." -c "The crane flew across the lake."
 
 .\.venv\Scripts\python.exe -m pytest -q
@@ -768,7 +929,7 @@ Exit codes: `0` success, `1` user/input error, `2` configuration or setup error.
 
 ---
 
-## 15. Example NLP Output
+## 16. Example NLP Output
 
 Actual output of:
 
@@ -896,7 +1057,114 @@ prompt in Phase 4.
 
 ---
 
-## 16. Configuration
+### Semantic analysis output
+
+Actual output of:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --analyze-semantics "I deposited money at the bank."
+```
+
+```text
+======================================================================
+AmbiSense - Semantic Analysis (Phase 3)
+======================================================================
+
+Input:
+  I deposited money at the bank.
+
+Lexical candidates analysed: 1
+
+----------------------------------------------------------------------
+Candidate:  bank   (lemma 'bank', noun)
+
+  Context words used: deposited, money
+  WordNet senses considered: 8 of 10 available
+
+  Rank 1:  similarity 0.7165
+    depository_financial_institution.n.01
+      a financial institution that accepts deposits and channels
+      the money into lending activities
+
+  Rank 2:  similarity 0.6843
+    bank.n.06
+      the funds held by a gambling house or the dealer in some
+      gambling games
+
+  Rank 3:  similarity 0.6727
+    savings_bank.n.02
+      a container (usually with a slot in the top) for keeping
+      money at home
+  ...
+
+  Margin over runner-up: 0.0322
+  Context favours top sense: False
+
+  Interpretation:
+    'a financial institution that accepts deposits and channels the'
+    ranks highest, but only by 0.032, which is below the configured
+    margin of 0.05. The context leans towards this sense without
+    clearly selecting it.
+
+======================================================================
+Note: these are cosine SIMILARITY scores between the context and each
+sense gloss. They are not probabilities, and a top rank is evidence
+about the context - not a decision about what the writer meant.
+======================================================================
+```
+
+The financial sense ranks first, which is the desired outcome — but note that
+the system does **not** claim the matter is settled. The margin over the
+runner-up is 0.032, below the configured 0.05, so `resolved_by_context` is
+`False` and the wording is "leans towards … without clearly selecting it".
+
+Contrast the riverbank context, where the margin is 0.151 and the system does
+report the context as favouring the top sense:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --analyze-semantics "The fisherman sat on the bank of the river."
+```
+
+```text
+  Context words used: fisherman, sat, river
+
+  Rank 1:  similarity 0.8170
+    bank.n.01
+      sloping land (especially the slope beside a body of water)
+
+  Rank 2:  similarity 0.6658
+    bank.n.06
+      the funds held by a gambling house or the dealer in some
+      gambling games
+
+  Margin over runner-up: 0.1511
+  Context favours top sense: True
+```
+
+Supplying a separate context passage with `-c` widens the context words used:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --analyze-semantics "The crane is ready." -c "The crane flew across the lake."
+```
+
+```text
+  Context words used: ready, flew, lake
+  WordNet senses considered: 5 of 5 available
+
+  Rank 1:  similarity 0.4371   crane.n.04   (lifts and moves heavy objects...)
+  Rank 2:  similarity 0.4343   crane.n.05   (large long-necked wading bird...)
+
+  Margin over runner-up: 0.0028
+  Context favours top sense: False
+```
+
+An honest result: the two senses are effectively tied (margin 0.0028), the
+machine sense is marginally ahead, and the system correctly declines to call
+it resolved. See [Known Limitations](#22-known-limitations).
+
+---
+
+## 17. Configuration
 
 All configuration lives in `config/config.yaml`. The sections are:
 
@@ -904,9 +1172,9 @@ All configuration lives in `config/config.yaml`. The sections are:
 |---|---|---|
 | `llm` | Read and validated; not used | Provider, model, base URL, temperature, max tokens, timeout, retries, caching |
 | `nlp` | **In use** | Language, spaCy model, input length guards, ASCII ratio threshold |
-| `embeddings` | Read and validated; not used | Backend selection (`spacy` or `sentence_transformers`) |
+| `embeddings` | Read and validated; not used | Backend selection field; Phase 3 uses the spaCy backend directly |
 | `detectors` | **In use** | Per-detector on/off switches and their thresholds |
-| `semantic_analysis` | Read and validated; not used | Sense-ranking parameters |
+| `semantic_analysis` | **In use** | Sense-ranking parameters: gloss representation, context construction, thresholds |
 | `scoring` | Read and validated; not used | Score weights and thresholds |
 | `output` | Read and validated; not used | Degraded-mode and evidence-inclusion switches |
 | `logging` | **In use** | Level and format |
@@ -924,7 +1192,7 @@ intended to require changing only `provider`, `model` and `base_url`.
 
 ---
 
-## 17. Environment Variables
+## 18. Environment Variables
 
 Secrets are never stored in `config.yaml` or in source code. Copy
 `.env.example` to `.env` and fill it in; `.env` is git-ignored.
@@ -942,16 +1210,16 @@ demonstration without editing the YAML file.
 
 ---
 
-## 18. Testing
+## 19. Testing
 
-The current implementation has **149 automated tests**, all passing.
+The current implementation has **197 automated tests**, all passing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ```text
-149 passed
+197 passed
 ```
 
 **Scope of these tests.** They cover the foundation, the NLP layer and the
@@ -973,9 +1241,15 @@ rule-based detection layer:
   detectors disabled; deduplication rules; determinism; span/offset integrity;
   JSON serialisability of evidence; and traversal helpers on a deliberately
   malformed (cyclic) parse.
+- `tests/test_semantic.py` — cosine similarity including every degenerate
+  input; POS-restricted sense retrieval; gloss construction options; the
+  bank and crane rankings (asserted as *relative* ranking, never as exact
+  similarity values, which would break on any model update); integration with
+  Phase 2 candidates; every `status` failure path via an injected fake
+  backend; threshold behaviour; determinism; and schema round-tripping.
 
-They do **not** test semantic similarity, LLM integration, scoring, the
-interface or evaluation, because none of those exist yet.
+They do **not** test LLM integration, scoring, the interface or evaluation,
+because none of those exist yet.
 
 **No test makes an API call.** The LLM-contract tests validate the schema
 against hand-written payloads, so the suite runs offline, costs nothing and is
@@ -999,7 +1273,7 @@ Two issues were found by these tests during development:
 
 ---
 
-## 19. Project Structure
+## 20. Project Structure
 
 This is the **actual** current contents of the repository. Empty directories
 and placeholder `__init__.py` files are marked as such.
@@ -1040,8 +1314,11 @@ NLP based ambiguity detector/
 │       │   ├── semantic.py
 │       │   ├── scope.py
 │       │   └── pragmatic.py
-│       ├── semantic/
-│       │   └── __init__.py              # (placeholder - Phase 3)
+│       ├── semantic/                    # Phase 3 - semantic analysis
+│       │   ├── __init__.py
+│       │   ├── wordnet_senses.py        # Sense retrieval with glosses
+│       │   ├── embeddings.py            # Vector backend + cosine similarity
+│       │   └── context_resolver.py      # SemanticAnalyzer
 │       ├── llm/
 │       │   ├── __init__.py              # (placeholder - Phase 4)
 │       │   └── providers/
@@ -1056,7 +1333,8 @@ NLP based ambiguity detector/
 │   ├── test_schemas.py
 │   ├── test_config.py
 │   ├── test_preprocessing.py
-│   └── test_detectors.py                # 149 tests in total
+│   ├── test_detectors.py
+│   └── test_semantic.py                 # 197 tests in total
 │
 ├── app/                                 # (empty - Phase 6)
 ├── prompts/                             # (empty - Phase 4)
@@ -1073,10 +1351,6 @@ Files expected to be added in later phases:
 ```
 src/ambisense/
 ├── pipeline.py                          # Phase 5 - orchestrator
-├── semantic/
-│   ├── wordnet_senses.py                # Phase 3
-│   ├── embeddings.py                    # Phase 3
-│   └── context_resolver.py              # Phase 3
 ├── llm/
 │   ├── client.py                        # Phase 4
 │   ├── prompt_builder.py                # Phase 4
@@ -1102,7 +1376,7 @@ data/evaluation/gold_set.jsonl           # Phase 7
 
 ---
 
-## 20. Design Decisions
+## 21. Design Decisions
 
 ### 19.1 spaCy `Doc` objects do not leave the preprocessing layer
 
@@ -1158,7 +1432,7 @@ verification system.
 
 ---
 
-## 21. Known Limitations
+## 22. Known Limitations
 
 ### Limitations of the current implementation
 
@@ -1185,6 +1459,49 @@ verification system.
 - **Rules are tuned on a small set of textbook examples**, not on a corpus.
   Whether the thresholds generalise is an open question that Phase 7 exists to
   answer.
+
+#### Limitations of the semantic analysis layer (Phase 3)
+
+- **WordNet is a hand-built lexical database and is not complete.** It was
+  compiled by lexicographers and does not cover every modern, technical or
+  domain-specific sense. A word used in a sense WordNet does not record cannot
+  be ranked correctly, because the correct option is not in the list.
+- **WordNet sense inventories are very fine-grained.** "bank" has ten noun
+  senses, several of which a non-specialist would consider the same meaning.
+  Fine distinctions split the similarity mass between near-identical glosses
+  and can push the intuitively correct sense down the ranking.
+- **Averaged word vectors are a baseline, not a semantic model.** Representing
+  a gloss by the mean of its word vectors discards word order, syntax and
+  negation entirely: "a bird that is not a machine" and "a machine that is not
+  a bird" receive the same vector.
+- **Gloss similarity is not human interpretation.** A high score means two
+  averaged vectors point in a similar direction, which is a rough proxy for
+  topical relatedness - not evidence that a reader would understand the word
+  that way.
+- **Some senses have very similar gloss vectors.** Where glosses use
+  overlapping vocabulary, similarities bunch together and the ranking becomes
+  close to arbitrary. The reported `margin` exists so this is visible: a small
+  margin means the ranking is weak evidence, and `resolved_by_context` stays
+  `false`.
+- **spaCy's vectors are static, not contextual.** Each word type has exactly
+  one vector regardless of how it is used, so "bank" in a river sentence and
+  "bank" in a finance sentence have the identical vector. This is the root
+  cause of the crane failure documented in [Section 12](#12-phase-3--semantic-analysis-complete):
+  long, generic glosses average towards the centre of the vector space and
+  score high against almost any context. A contextual (transformer) model
+  would address this, at the cost of a large dependency and a much harder
+  method to explain.
+- **No labelled dataset has been used to calibrate the scores.** The
+  similarity threshold and the resolution margin were chosen by inspecting a
+  handful of sentences. They are not fitted values, and no accuracy figure is
+  claimed anywhere in this document. Measuring this is Phase 7's purpose.
+- **The layer can be confidently wrong.** For "The crane lifted the heavy
+  container.", the wrong sense wins by a margin large enough that the system
+  reports `resolved_by_context = true`. A large margin means the top sense is
+  clearly ahead of the others - not that it is correct.
+- **Phase 3 does not decide anything.** It ranks senses and reports evidence.
+  Whether a word is genuinely ambiguous, and what the writer meant, remains
+  undetermined until the Phase 4 reasoning layer exists.
 - **The language guard is a heuristic, not language identification.** It
   measures the proportion of ASCII alphabetic characters. Romanised text in
   another language — for example Hindi written in Latin script — will pass the
@@ -1225,28 +1542,28 @@ run, and no metrics exist yet.
 
 ---
 
-## 22. Planned Development Phases
+## 23. Planned Development Phases
 
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Foundation — packaging, configuration, logging | **Complete** |
 | 1 | Schemas and NLP layer | **Complete** |
 | 2 | Rule-based ambiguity detection — six detectors plus registry | **Complete** |
-| 3 | Semantic analysis — WordNet senses, embeddings, context-based sense ranking | **Next** |
-| 4 | LLM integration — prompt files, provider-agnostic client, structured output validation and repair | Planned |
+| 3 | Semantic analysis — WordNet senses, embeddings, context-based sense ranking | **Complete** |
+| 4 | LLM integration — prompt files, provider-agnostic client, structured output validation and repair | **Next** |
 | 5 | Context-aware reasoning and ambiguity scoring — pipeline orchestrator, transparent score, degraded mode | Planned |
 | 6 | User interface — Streamlit application with span highlighting and demo examples | Planned |
 | 7 | Evaluation — labelled dataset, accuracy/precision/recall/F1, manual review of explanations and rewrites | Planned |
 | 8 | Documentation, testing and final polish | Planned |
 
-Phase 3 is the next piece of work. It will add WordNet gloss retrieval,
-an embedding backend built on the `en_core_web_md` vectors, and context-based
-sense ranking - the feature that will let the system explain why
-"The crane flew across the lake." favours the bird reading of *crane*.
+Phase 4 is the next piece of work. It will add the prompt files, a
+provider-agnostic LLM client, strict validation of the model's JSON output and
+a repair round-trip. The evidence gathered by Phases 2 and 3 becomes the
+material that prompt is built from.
 
 ---
 
-## 23. Technology Stack
+## 24. Technology Stack
 
 ### Currently used
 
@@ -1258,14 +1575,15 @@ sense ranking - the feature that will let the system explain why
 | Pydantic | 2.x | Typed models, validation, serialisation |
 | PyYAML | 6.x | Configuration parsing |
 | python-dotenv | 1.x | Loading secrets from `.env` |
-| NLTK (WordNet) | 3.10.x | Sense counts and semantic-domain spread for the lexical detector |
+| NLTK (WordNet) | 3.10.x | Sense counts and domain spread (Phase 2); sense glosses and examples (Phase 3) |
+| NumPy | 2.x | Mean word vectors and cosine similarity |
 | pytest | 9.x | Test framework |
 
 ### Installed, reserved for later phases
 
 | Technology | Intended role | Phase |
 |---|---|---|
-| NumPy | Cosine similarity for sense ranking | 3 |
+
 | httpx | HTTP transport for the LLM API | 4 |
 | scikit-learn | Evaluation metrics | 7 |
 | Streamlit | User interface | 6 |
@@ -1284,7 +1602,7 @@ sense ranking - the feature that will let the system explain why
 
 ---
 
-## 24. Future Work
+## 25. Future Work
 
 Beyond the eight planned phases, the following would be reasonable extensions
 and are **not** part of this submission:
@@ -1305,7 +1623,7 @@ and are **not** part of this submission:
 
 ---
 
-## 25. License
+## 26. License
 
 This project is submitted as academic coursework.
 

@@ -15,6 +15,7 @@ import sys
 import textwrap
 
 from ambisense.ambiguity import DetectorRegistry
+from ambisense.semantic import SemanticAnalyzer, SpacyEmbeddingBackend
 from ambisense.config import ConfigError, load_settings
 from ambisense.logging_setup import configure_logging, get_logger
 from ambisense.preprocessing import (
@@ -23,7 +24,11 @@ from ambisense.preprocessing import (
     ModelLoadError,
     clean_and_validate,
 )
-from ambisense.schemas import AmbiguityCandidate, LinguisticAnalysis
+from ambisense.schemas import (
+    AmbiguityCandidate,
+    LinguisticAnalysis,
+    SenseRanking,
+)
 
 logger = get_logger(__name__)
 
@@ -67,6 +72,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-evidence",
         action="store_true",
         help="With --detect-only, print the full evidence for each candidate.",
+    )
+    parser.add_argument(
+        "--analyze-semantics",
+        action="store_true",
+        help=(
+            "Rank the WordNet senses of each lexical candidate against the "
+            "sentence context. No LLM call is made."
+        ),
     )
     parser.add_argument(
         "--check-config",
@@ -227,6 +240,85 @@ def render_candidates(
     return "\n".join(lines)
 
 
+def render_sense_rankings(
+    text: str,
+    rankings: list[SenseRanking],
+    *,
+    context: str | None = None,
+) -> str:
+    """Render Phase 3 sense rankings for the terminal."""
+    bar = "=" * 70
+    lines = [bar, "AmbiSense - Semantic Analysis (Phase 3)", bar, ""]
+    lines.append("Input:")
+    lines.append(f"  {text}")
+    if context:
+        lines.append("")
+        lines.append("Context:")
+        lines.append(f"  {context}")
+    lines.append("")
+
+    if not rankings:
+        lines.append("  No lexical candidates were found, so there are no word")
+        lines.append("  senses to rank. Sense ranking applies to lexical")
+        lines.append("  ambiguity only - run --detect-only to see all candidates.")
+        lines.append("")
+        lines.append(bar)
+        return "\n".join(lines)
+
+    lines.append(f"Lexical candidates analysed: {len(rankings)}")
+    lines.append("")
+
+    for ranking in rankings:
+        lines.append("-" * 70)
+        lines.append(f"Candidate:  {ranking.word}   "
+                     f"(lemma '{ranking.lemma}', {ranking.pos.lower()})")
+        lines.append("")
+
+        if not ranking.status.is_usable:
+            lines.append(f"  Status: {ranking.status.value}")
+            for line in textwrap.wrap(ranking.note, width=64):
+                lines.append(f"  {line}")
+            lines.append("")
+            continue
+
+        lines.append(f"  Context words used: "
+                     f"{', '.join(ranking.context_words) or '(none)'}")
+        lines.append(f"  WordNet senses considered: {len(ranking.senses)} "
+                     f"of {ranking.senses_available} available")
+        lines.append("")
+
+        for sense in ranking.senses:
+            similarity = sense.context_similarity
+            score = "n/a" if similarity is None else f"{similarity:.4f}"
+            lines.append(f"  Rank {sense.rank}:  similarity {score}")
+            lines.append(f"    {sense.sense_key}")
+            for line in textwrap.wrap(sense.definition, width=60):
+                lines.append(f"      {line}")
+            lines.append("")
+
+        margin = "n/a" if ranking.margin is None else f"{ranking.margin:.4f}"
+        lines.append(f"  Margin over runner-up: {margin}")
+        lines.append(f"  Context favours top sense: {ranking.resolved_by_context}")
+        lines.append("")
+        lines.append("  Interpretation:")
+        for line in textwrap.wrap(ranking.note, width=64):
+            lines.append(f"    {line}")
+        lines.append("")
+
+    lines.append(bar)
+    lines.append(
+        "Note: these are cosine SIMILARITY scores between the context and each"
+    )
+    lines.append(
+        "sense gloss. They are not probabilities, and a top rank is evidence"
+    )
+    lines.append(
+        "about the context - not a decision about what the writer meant."
+    )
+    lines.append(bar)
+    return "\n".join(lines)
+
+
 def render_config_check(settings, analyzer_ok: bool, wordnet_ok: bool) -> str:
     lines = [_rule("CONFIGURATION CHECK")]
     lines.append(f"  config file      : {settings.project_root / 'config' / 'config.yaml'}")
@@ -311,6 +403,47 @@ def command_detect_only(
     return EXIT_OK
 
 
+def command_analyze_semantics(
+    settings,
+    text: str,
+    context: str | None,
+) -> int:
+    """Validation -> analysis -> detectors -> WordNet sense ranking.
+
+    Makes no network call and uses no LLM.
+    """
+    cleaned = clean_and_validate(text, context, settings.nlp)
+    for warning in cleaned.warnings:
+        logger.warning("%s", warning)
+
+    analyzer = LinguisticAnalyzer(settings.nlp.spacy_model)
+    analysis = analyzer.analyze(cleaned.text)
+    context_analysis = (
+        analyzer.analyze(cleaned.context) if cleaned.context else None
+    )
+
+    candidates = DetectorRegistry(settings.detectors).run(analysis)
+
+    backend = SpacyEmbeddingBackend(analyzer.nlp)
+    if not backend.has_vectors:
+        print(
+            f"Semantic analysis needs a spaCy model with word vectors. "
+            f"'{settings.nlp.spacy_model}' has none - install en_core_web_md.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
+
+    semantic = SemanticAnalyzer(settings.semantic_analysis, backend)
+    rankings = semantic.analyze_candidates(
+        candidates, analysis, context_analysis
+    )
+
+    print(render_sense_rankings(
+        cleaned.text, rankings, context=cleaned.context
+    ))
+    return EXIT_OK
+
+
 def command_dump_nlp(settings, text: str, context: str | None) -> int:
     cleaned = clean_and_validate(text, context, settings.nlp)
     for warning in cleaned.warnings:
@@ -351,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.text:
         print("No text supplied. Try:\n"
               '  python main.py --detect-only "I saw the man with the telescope."\n'
+              '  python main.py --analyze-semantics "I deposited money at the bank."\n'
               '  python main.py --dump-nlp "I saw the man with the telescope."\n'
               "  python main.py --check-config", file=sys.stderr)
         return EXIT_USER_ERROR
@@ -362,9 +496,14 @@ def main(argv: list[str] | None = None) -> int:
             return command_detect_only(
                 settings, args.text, args.context, args.show_evidence
             )
+        if args.analyze_semantics:
+            return command_analyze_semantics(
+                settings, args.text, args.context
+            )
         print("Full analysis (with LLM reasoning) is implemented in a later "
               "phase. Use --detect-only for rule-based candidate detection, "
-              "or --dump-nlp for the NLP layer output.",
+              "--analyze-semantics for WordNet sense ranking, or --dump-nlp "
+              "for the NLP layer output.",
               file=sys.stderr)
         return EXIT_USER_ERROR
     except InputValidationError as exc:

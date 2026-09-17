@@ -258,34 +258,87 @@ class AmbiguityCandidate(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class SemanticAnalysisStatus(str, Enum):
+    """Why a sense ranking did or did not produce scores.
+
+    Phase 3 must never manufacture a similarity score. When a ranking cannot
+    be computed the reason is reported explicitly instead.
+    """
+
+    RANKED = "ranked"
+    NO_SENSES = "no_senses_found"
+    NO_CONTEXT_VECTOR = "no_usable_context_vector"
+    NO_GLOSS_VECTORS = "no_usable_gloss_vectors"
+    WORDNET_UNAVAILABLE = "wordnet_unavailable"
+    DISABLED = "disabled"
+
+    @property
+    def is_usable(self) -> bool:
+        return self is SemanticAnalysisStatus.RANKED
+
+
 class SenseOption(BaseModel):
     """One WordNet sense of a word, optionally scored against the context."""
 
-    sense_key: str
+    sense_key: str = Field(description="WordNet synset name, e.g. 'bank.n.01'.")
     definition: str
     pos: str
     examples: list[str] = Field(default_factory=list)
     lemma_names: list[str] = Field(default_factory=list)
     context_similarity: Optional[float] = Field(
         default=None,
-        description="Cosine similarity between context and this sense's gloss.",
+        description=(
+            "Cosine similarity between the context vector and this sense's "
+            "gloss vector, in [-1, 1]. This is a similarity score, NOT a "
+            "probability that the word carries this sense."
+        ),
+    )
+    rank: Optional[int] = Field(
+        default=None,
+        description="1-based position after sorting by similarity.",
     )
 
 
 class SenseRanking(BaseModel):
-    """Result of ranking a word's senses against the supplied context."""
+    """Result of ranking one word's WordNet senses against its context.
+
+    This records *evidence*, not a decision. A top-ranked sense means only
+    that its gloss is the most similar of those retrieved - it does not mean
+    the word definitely carries that sense.
+    """
 
     word: str
     lemma: str
     pos: str
+    status: SemanticAnalysisStatus = SemanticAnalysisStatus.RANKED
     senses: list[SenseOption] = Field(default_factory=list)
     top_sense_key: Optional[str] = None
     margin: Optional[float] = Field(
         default=None,
         description="Similarity gap between the best and second-best sense.",
     )
-    resolved_by_context: bool = False
+    resolved_by_context: bool = Field(
+        default=False,
+        description=(
+            "True when the top sense leads the runner-up by more than the "
+            "configured margin. An uncalibrated heuristic, not a guarantee."
+        ),
+    )
+    context_words: list[str] = Field(
+        default_factory=list,
+        description="The content words used to build the context vector.",
+    )
+    senses_available: int = Field(
+        default=0,
+        description="Senses WordNet held, before the configured cap.",
+    )
+    char_start: Optional[int] = None
+    char_end: Optional[int] = None
     note: str = ""
+
+    @property
+    def top_sense(self) -> Optional[SenseOption]:
+        return self.senses[0] if self.senses else None
 
 
 # ---------------------------------------------------------------------------

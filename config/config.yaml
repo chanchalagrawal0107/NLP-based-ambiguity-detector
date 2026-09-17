@@ -131,13 +131,40 @@ detectors:
     require_question_mark: true
 
 semantic_analysis:
-  # Context-based word-sense ranking (the "crane" feature).
+  # Phase 3: rank a word's WordNet senses by how similar their glosses are to
+  # the surrounding context. Produces EVIDENCE, not a decision.
   enable_context_sense_ranking: true
+
+  # WordNet orders senses by frequency, so the first N are the common ones.
   max_senses_considered: 8
-  # If the top sense beats the runner-up by more than this cosine margin,
-  # we treat the context as having resolved the ambiguity.
-  sense_resolution_margin: 0.08
-  # Minimum similarity for a sense to be reported at all.
+
+  # --- gloss representation -------------------------------------------
+  # Measured on this project's examples: adding WordNet's usage EXAMPLES to
+  # the gloss moves the financial sense of "bank" from rank 4 to rank 1 for
+  # "I deposited money at the bank." Adding lemma names makes it worse
+  # (a "savings_bank" sense then outranks it), so lemma names stay off.
+  gloss_includes_examples: true
+  gloss_includes_lemma_names: false
+
+  # --- context representation -----------------------------------------
+  # Only these coarse POS tags contribute to the context vector; function
+  # words and punctuation add noise without adding meaning.
+  context_content_pos: [NOUN, VERB, ADJ, ADV, PROPN]
+  # Exclude the ambiguous word itself: it contributes the same vector to
+  # every comparison and only dilutes the differences between senses.
+  exclude_target_word: true
+  # Include the user-supplied context passage, when one is given.
+  include_user_context: true
+  # Below this many usable content words, no ranking is attempted and the
+  # status is reported as no_usable_context_vector.
+  min_context_words: 1
+
+  # --- reporting -------------------------------------------------------
+  # If the top sense beats the runner-up by more than this cosine margin, we
+  # report resolved_by_context = true. UNCALIBRATED: chosen by inspecting a
+  # handful of examples, not fitted to labelled data. See README limitations.
+  sense_resolution_margin: 0.05
+  # Senses scoring below this are omitted from the report as uninformative.
   min_sense_similarity: 0.15
 
 scoring:

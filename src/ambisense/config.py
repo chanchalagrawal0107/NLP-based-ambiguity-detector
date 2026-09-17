@@ -119,9 +119,29 @@ class DetectorsConfig(BaseModel):
 
 
 class SemanticAnalysisConfig(BaseModel):
+    """Phase 3: context-based WordNet sense ranking.
+
+    Defaults for the gloss options were chosen by measurement, not taste -
+    see the comments in ``config/config.yaml``.
+    """
+
     enable_context_sense_ranking: bool = True
     max_senses_considered: int = 8
-    sense_resolution_margin: float = 0.08
+
+    # Gloss representation
+    gloss_includes_examples: bool = True
+    gloss_includes_lemma_names: bool = False
+
+    # Context representation
+    context_content_pos: list[str] = Field(
+        default_factory=lambda: ["NOUN", "VERB", "ADJ", "ADV", "PROPN"]
+    )
+    exclude_target_word: bool = True
+    include_user_context: bool = True
+    min_context_words: int = 1
+
+    # Reporting
+    sense_resolution_margin: float = 0.05
     min_sense_similarity: float = 0.15
 
 
@@ -262,6 +282,27 @@ def _validate_consistency(settings: Settings) -> None:
         )
     if settings.nlp.max_input_length < settings.nlp.min_input_length:
         raise ConfigError("nlp.max_input_length is below nlp.min_input_length.")
+
+    semantic = settings.semantic_analysis
+    if semantic.max_senses_considered < 1:
+        raise ConfigError(
+            "semantic_analysis.max_senses_considered must be at least 1."
+        )
+    if not -1.0 <= semantic.min_sense_similarity <= 1.0:
+        raise ConfigError(
+            "semantic_analysis.min_sense_similarity must lie in [-1, 1]; "
+            "it is compared against a cosine similarity."
+        )
+    if not 0.0 <= semantic.sense_resolution_margin <= 2.0:
+        raise ConfigError(
+            "semantic_analysis.sense_resolution_margin must lie in [0, 2]; "
+            "it is a gap between two cosine similarities."
+        )
+    if not semantic.context_content_pos:
+        raise ConfigError(
+            "semantic_analysis.context_content_pos must list at least one "
+            "part-of-speech tag, or no context vector can ever be built."
+        )
 
 
 @lru_cache(maxsize=1)
