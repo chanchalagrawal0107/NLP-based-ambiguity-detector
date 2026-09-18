@@ -1,0 +1,40 @@
+{
+  "description": "Manually inspectable cases for the Phase 4 LLM adjudication layer. Run with: python main.py --live-llm-test. The 'what_to_check' notes guide a human reviewer. They are never read by the analysis code and do not influence any verdict.",
+  "cases": [
+    {
+      "id": "syntactic_pp_attachment",
+      "text": "I saw the man with the telescope.",
+      "what_to_check": "Phase 2 flags a PP-attachment candidate. Both readings are ordinary English, so a genuine ambiguity with two distinct interpretations is the expected outcome."
+    },
+    {
+      "id": "lexical_bank_financial",
+      "text": "I deposited money at the bank.",
+      "what_to_check": "Phase 3 ranks the financial sense first but with a small margin. Also check the syntactic 'at the bank' candidate: an ordinary reader attaches it to 'deposited', so it is a candidate the LLM should be free to reject."
+    },
+    {
+      "id": "lexical_bank_river",
+      "text": "The fisherman sat on the bank of the river.",
+      "what_to_check": "The phrase 'of the river' fixes the meaning of 'bank' inside the sentence itself. Check whether the lexical candidate is judged not ambiguous."
+    },
+    {
+      "id": "referential_pronoun",
+      "text": "John told David that he was late.",
+      "what_to_check": "Phase 2 finds two antecedents for 'he'. Both are natural readings."
+    },
+    {
+      "id": "semantic_tough_construction",
+      "text": "The chicken is ready to eat.",
+      "what_to_check": "The textbook agent/patient ambiguity. Also check the lexical candidates on 'chicken' and 'eat', which the rule-based layer over-flags."
+    },
+    {
+      "id": "phase2_false_positive",
+      "text": "She bought three apples at the market.",
+      "what_to_check": "Phase 2 flags PP attachment because '[the apples at the market]' is structurally available. An ordinary reader takes one reading only. Check whether the LLM rejects the structural candidate."
+    },
+    {
+      "id": "phase3_known_failure",
+      "text": "The crane lifted the heavy container.",
+      "what_to_check": "Phase 3 ranks the BIRD sense first with a margin large enough to count as resolved - a documented failure. Check whether the LLM selects the machine sense instead; if it does, the application derives agrees_with_phase3 = false by comparing sense keys (the LLM does not report agreement)."
+    }
+  ]
+}

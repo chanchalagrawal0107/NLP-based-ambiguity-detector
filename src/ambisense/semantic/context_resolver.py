@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+from ambisense.ambiguity.wordnet_support import wordnet_available
 from ambisense.config import SemanticAnalysisConfig
 from ambisense.logging_setup import get_logger
 from ambisense.semantic.embeddings import (
@@ -135,11 +136,19 @@ class SemanticAnalyzer:
         )
         base.senses_available = count_available_senses(lemma, spacy_pos)
         if not senses:
-            base.status = SemanticAnalysisStatus.NO_SENSES
-            base.note = (
-                f"WordNet holds no senses for '{lemma}' as a "
-                f"{spacy_pos.lower()}."
-            )
+            if not wordnet_available():
+                base.status = SemanticAnalysisStatus.WORDNET_UNAVAILABLE
+                base.note = (
+                    "The WordNet corpus is not installed, so no senses could "
+                    "be retrieved for any word. See the README installation "
+                    "section for the NLTK download command."
+                )
+            else:
+                base.status = SemanticAnalysisStatus.NO_SENSES
+                base.note = (
+                    f"WordNet holds no senses for '{lemma}' as a "
+                    f"{spacy_pos.lower()}."
+                )
             return base
 
         context_words = self._context_words(

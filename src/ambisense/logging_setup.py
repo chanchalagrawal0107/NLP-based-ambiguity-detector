@@ -19,8 +19,9 @@ _CONFIGURED = False
 def configure_logging(config: Optional[LoggingConfig] = None) -> None:
     """Install a single stream handler on the ``ambisense`` logger.
 
-    Idempotent: calling it repeatedly (Streamlit re-runs the script on every
-    interaction) will not duplicate handlers or duplicate log lines.
+    Idempotent: calling it more than once in a process (as the test suite
+    and the live-LLM-test loop both do) will not duplicate handlers or
+    duplicate log lines.
     """
     global _CONFIGURED
     config = config or LoggingConfig()

@@ -1,0 +1,7 @@
+===USER===
+Your previous reply could not be accepted because it did not match the required JSON format.
+
+Problems found:
+$problems
+
+Return the complete, corrected JSON object covering every candidate_id, following the OUTPUT format in your instructions exactly. Return only the JSON object.

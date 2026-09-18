@@ -5,8 +5,7 @@ These guard two things:
 1. The shipped ``config/config.yaml`` actually loads and satisfies every
    consistency rule - a broken config file would break every other layer.
 2. ``_validate_consistency`` catches the *semantic* mistakes that YAML parsing
-   and type checking cannot, such as weights that are individually valid
-   floats but collectively wrong.
+   and type checking cannot, such as an unimplemented embeddings backend.
 """
 
 from __future__ import annotations
@@ -39,14 +38,6 @@ def _write_config(tmp_path, data: dict):
 def _minimal_valid() -> dict:
     """The smallest config that passes every consistency rule."""
     return {
-        "scoring": {
-            "weights": {
-                "llm_confidence": 0.4,
-                "detector_evidence": 0.3,
-                "interpretation_count": 0.2,
-                "context_uncertainty": 0.1,
-            }
-        },
         "embeddings": {"backend": "spacy"},
         "nlp": {"min_input_length": 3, "max_input_length": 100},
     }
@@ -55,9 +46,6 @@ def _minimal_valid() -> dict:
 class TestShippedConfig:
     def test_it_loads(self, shipped_settings):
         assert shipped_settings.nlp.spacy_model == "en_core_web_md"
-
-    def test_weights_sum_to_one(self, shipped_settings):
-        assert shipped_settings.scoring.weights.total() == pytest.approx(1.0)
 
     def test_every_detector_has_a_settings_block(self, shipped_settings):
         """Phase 2 fix: `semantic` was enabled but had no settings block."""
@@ -101,16 +89,17 @@ class TestDetectorsConfigAccessors:
 
 
 class TestConsistencyValidation:
-    def test_weights_not_summing_to_one_is_rejected(self, tmp_path):
-        data = _minimal_valid()
-        data["scoring"]["weights"]["llm_confidence"] = 0.9
-        with pytest.raises(ConfigError, match="must sum to 1.0"):
-            load_settings(_write_config(tmp_path, data))
-
     def test_unknown_embeddings_backend_is_rejected(self, tmp_path):
         data = _minimal_valid()
         data["embeddings"]["backend"] = "telepathy"
         with pytest.raises(ConfigError, match="embeddings.backend"):
+            load_settings(_write_config(tmp_path, data))
+
+    def test_unimplemented_embeddings_backend_is_rejected(self, tmp_path):
+        """A recognised-sounding name still fails without a working adapter."""
+        data = _minimal_valid()
+        data["embeddings"]["backend"] = "sentence_transformers"
+        with pytest.raises(ConfigError, match="not implemented"):
             load_settings(_write_config(tmp_path, data))
 
     def test_inverted_length_bounds_are_rejected(self, tmp_path):
@@ -121,7 +110,7 @@ class TestConsistencyValidation:
 
     def test_minimal_valid_config_loads(self, tmp_path):
         settings = load_settings(_write_config(tmp_path, _minimal_valid()))
-        assert settings.scoring.weights.total() == pytest.approx(1.0)
+        assert settings.embeddings.backend == "spacy"
 
     def test_missing_file_is_reported_clearly(self, tmp_path):
         with pytest.raises(ConfigError, match="not found"):

@@ -431,6 +431,28 @@ class TestFailurePaths:
         assert ranking.senses == []
         assert "no senses" in ranking.note.lower()
 
+    def test_missing_wordnet_corpus_reports_wordnet_unavailable(
+        self, analysis, monkeypatch
+    ):
+        """An absent corpus must be distinguished from a word with no senses."""
+        import ambisense.semantic.context_resolver as context_resolver
+
+        monkeypatch.setattr(
+            context_resolver, "retrieve_senses", lambda *a, **k: ()
+        )
+        monkeypatch.setattr(
+            context_resolver, "count_available_senses", lambda *a, **k: 0
+        )
+        monkeypatch.setattr(
+            context_resolver, "wordnet_available", lambda: False
+        )
+        analyzer_ = SemanticAnalyzer(SemanticAnalysisConfig(), FakeBackend())
+        ranking = analyzer_.analyze_word(
+            word="bank", lemma="bank", spacy_pos="NOUN", analysis=analysis,
+        )
+        assert ranking.status is SemanticAnalysisStatus.WORDNET_UNAVAILABLE
+        assert "not installed" in ranking.note.lower()
+
     def test_missing_backend_reports_no_context_vector(self, analysis):
         analyzer_ = SemanticAnalyzer(SemanticAnalysisConfig(), backend=None)
         ranking = analyzer_.analyze_word(

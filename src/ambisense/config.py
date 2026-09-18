@@ -4,7 +4,8 @@ Two sources, strictly separated:
 
 * ``config/config.yaml`` - all behaviour: model names, thresholds, weights,
   detector switches. Committed to the repository.
-* ``.env``               - secrets only (the API key). Never committed.
+* ``.env``               - optional overrides (e.g. ``LLM_MODEL``) and any
+  secret. Never committed. A local Ollama server needs no key.
 
 Nothing in ``src/`` hard-codes a threshold or a model name; everything is read
 through the :class:`Settings` object returned by :func:`load_settings`.
@@ -13,7 +14,6 @@ through the :class:`Settings` object returned by :func:`load_settings`.
 from __future__ import annotations
 
 import os
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
@@ -42,41 +42,74 @@ class ConfigError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+#: Providers with a working adapter. Kept here, next to the config it
+#: validates, so an unimplemented provider fails at startup - not mid-demo.
+IMPLEMENTED_PROVIDERS: tuple[str, ...] = ("ollama",)
+
+
 class LLMConfig(BaseModel):
-    provider: str = "groq"
-    model: str = "llama-3.3-70b-versatile"
-    base_url: str = "https://api.groq.com/openai/v1"
-    temperature: float = 0.1
-    max_tokens: int = 2000
-    timeout_seconds: float = 45.0
-    max_retries: int = 3
+    """Transport settings: how to reach the model. Secrets excluded."""
+
+    provider: str = "ollama"
+    model: str = "qwen3:14b"
+    base_url: str = "http://localhost:11434/v1"
+    temperature: float = 0.0
+    max_tokens: int = 4000
+    timeout_seconds: float = 600.0
+    max_retries: int = 1
     retry_backoff_seconds: float = 2.0
+    max_retry_wait_seconds: float = 30.0
     request_json_mode: bool = True
     enable_cache: bool = True
     cache_dir: str = "data/cache"
 
-    # Populated from the environment, never from YAML.
+    # Optional, populated from the environment, never from YAML. A local
+    # Ollama server needs no key; this exists only for a server placed behind
+    # an authenticating reverse proxy.
     api_key: Optional[str] = Field(default=None, exclude=True)
 
     @property
-    def has_credentials(self) -> bool:
-        return bool(self.api_key and self.api_key.strip()
-                    and self.api_key != "your_api_key_here")
+    def auth_token(self) -> Optional[str]:
+        """The key to send, or ``None`` when none is configured."""
+        key = (self.api_key or "").strip()
+        return key or None
+
+
+class AdjudicationConfig(BaseModel):
+    """Phase 4: what the LLM is asked and how much evidence it receives."""
+
+    enabled: bool = True
+    batch_candidates: bool = True
+    max_candidates_per_request: int = 6
+    max_senses_in_prompt: int = 4
+    max_gloss_chars: int = 160
+    enable_repair: bool = True
+    generate_rewrites: bool = True
+    adjudication_prompt: str = "ambiguity_analysis.txt"
+    rewrite_prompt: str = "rewrite_generation.txt"
+    repair_prompt: str = "json_repair.txt"
+
+    @property
+    def batch_size(self) -> int:
+        """Candidates per request: 1 when batching is disabled."""
+        return self.max_candidates_per_request if self.batch_candidates else 1
 
 
 class NLPConfig(BaseModel):
-    language: str = "en"
     spacy_model: str = "en_core_web_md"
     min_input_length: int = 3
     max_input_length: int = 2000
     max_context_length: int = 2000
-    max_sentences: int = 10
     min_ascii_ratio: float = 0.85
+
+
+#: Embedding backends with a working adapter. See IMPLEMENTED_PROVIDERS above
+#: for the same pattern applied to the LLM provider.
+IMPLEMENTED_BACKENDS: tuple[str, ...] = ("spacy",)
 
 
 class EmbeddingsConfig(BaseModel):
     backend: str = "spacy"
-    sentence_transformer_model: str = "all-MiniLM-L6-v2"
 
 
 class DetectorsConfig(BaseModel):
@@ -145,29 +178,6 @@ class SemanticAnalysisConfig(BaseModel):
     min_sense_similarity: float = 0.15
 
 
-class ScoringWeights(BaseModel):
-    llm_confidence: float = 0.45
-    detector_evidence: float = 0.25
-    interpretation_count: float = 0.15
-    context_uncertainty: float = 0.15
-
-    def total(self) -> float:
-        return (self.llm_confidence + self.detector_evidence
-                + self.interpretation_count + self.context_uncertainty)
-
-
-class ScoringConfig(BaseModel):
-    weights: ScoringWeights = Field(default_factory=ScoringWeights)
-    ambiguity_threshold: float = 0.45
-    confidence_threshold: float = 0.35
-    max_interpretations_for_score: int = 4
-
-
-class OutputConfig(BaseModel):
-    allow_degraded_mode: bool = True
-    include_nlp_evidence_in_report: bool = True
-
-
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -178,14 +188,13 @@ class Settings(BaseModel):
     """The whole application configuration as one typed object."""
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    adjudication: AdjudicationConfig = Field(default_factory=AdjudicationConfig)
     nlp: NLPConfig = Field(default_factory=NLPConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     detectors: DetectorsConfig = Field(default_factory=DetectorsConfig)
     semantic_analysis: SemanticAnalysisConfig = Field(
         default_factory=SemanticAnalysisConfig
     )
-    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
-    output: OutputConfig = Field(default_factory=OutputConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     project_root: Path = PROJECT_ROOT
@@ -225,7 +234,11 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _apply_env_overrides(settings: Settings) -> Settings:
-    """Secrets and optional quick overrides come from the environment."""
+    """Optional secrets and quick overrides come from the environment.
+
+    ``LLM_MODEL`` is the useful one in practice: it switches the local model
+    for one run without editing YAML.
+    """
     settings.llm.api_key = os.getenv("LLM_API_KEY")
 
     if provider := os.getenv("LLM_PROVIDER"):
@@ -250,7 +263,7 @@ def load_settings(config_path: Optional[Path | str] = None) -> Settings:
 
     Raises:
         ConfigError: if the file is missing, malformed, or internally
-            inconsistent (for example scoring weights that do not sum to 1).
+            inconsistent (for example an unimplemented LLM provider).
     """
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
@@ -269,19 +282,45 @@ def load_settings(config_path: Optional[Path | str] = None) -> Settings:
 
 def _validate_consistency(settings: Settings) -> None:
     """Catch configuration mistakes early rather than mid-analysis."""
-    weight_total = settings.scoring.weights.total()
-    if abs(weight_total - 1.0) > 0.01:
+    if settings.embeddings.backend not in IMPLEMENTED_BACKENDS:
         raise ConfigError(
-            f"scoring.weights must sum to 1.0, got {weight_total:.3f}. "
-            "Adjust config/config.yaml."
-        )
-    if settings.embeddings.backend not in {"spacy", "sentence_transformers"}:
-        raise ConfigError(
-            f"Unknown embeddings.backend: {settings.embeddings.backend!r}. "
-            "Use 'spacy' or 'sentence_transformers'."
+            f"embeddings.backend {settings.embeddings.backend!r} is not "
+            f"implemented. Implemented backends: "
+            f"{', '.join(IMPLEMENTED_BACKENDS)}."
         )
     if settings.nlp.max_input_length < settings.nlp.min_input_length:
         raise ConfigError("nlp.max_input_length is below nlp.min_input_length.")
+
+    llm = settings.llm
+    if llm.provider not in IMPLEMENTED_PROVIDERS:
+        raise ConfigError(
+            f"llm.provider {llm.provider!r} is not implemented. "
+            f"Implemented providers: {', '.join(IMPLEMENTED_PROVIDERS)}."
+        )
+    if not 0.0 <= llm.temperature <= 2.0:
+        raise ConfigError("llm.temperature must lie in [0, 2].")
+    if llm.max_tokens < 1 or llm.timeout_seconds <= 0:
+        raise ConfigError("llm.max_tokens and llm.timeout_seconds must be positive.")
+    if not 0 <= llm.max_retries <= 5:
+        raise ConfigError(
+            "llm.max_retries must lie in [0, 5]; retries are deliberately bounded."
+        )
+
+    adjudication = settings.adjudication
+    if adjudication.max_candidates_per_request < 1:
+        raise ConfigError("adjudication.max_candidates_per_request must be >= 1.")
+    if adjudication.max_senses_in_prompt < 0 or adjudication.max_gloss_chars < 20:
+        raise ConfigError(
+            "adjudication.max_senses_in_prompt must be >= 0 and "
+            "adjudication.max_gloss_chars must be >= 20."
+        )
+    for field_name in ("adjudication_prompt", "rewrite_prompt", "repair_prompt"):
+        prompt_file = settings.prompt_path(getattr(adjudication, field_name))
+        if not prompt_file.is_file():
+            raise ConfigError(
+                f"adjudication.{field_name} points to a missing prompt file: "
+                f"prompts/{prompt_file.name}"
+            )
 
     semantic = settings.semantic_analysis
     if semantic.max_senses_considered < 1:
@@ -303,9 +342,3 @@ def _validate_consistency(settings: Settings) -> None:
             "semantic_analysis.context_content_pos must list at least one "
             "part-of-speech tag, or no context vector can ever be built."
         )
-
-
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """Cached accessor so the YAML is parsed once per process."""
-    return load_settings()

@@ -13,11 +13,5 @@ python-dotenv>=1.0
 # --- LLM transport (provider-agnostic HTTP) ---
 httpx>=0.27
 
-# --- Evaluation ---
-scikit-learn>=1.5
-
-# --- User interface ---
-streamlit>=1.38
-
 # --- Tests ---
 pytest>=8.0

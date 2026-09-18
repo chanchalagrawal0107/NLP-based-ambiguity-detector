@@ -2,39 +2,50 @@
 
 Usage examples::
 
+    python main.py --analyze "I saw the man with the telescope."
+    python main.py --detect-only "I saw the man with the telescope."
+    python main.py --analyze-semantics "I deposited money at the bank."
     python main.py --dump-nlp "I saw the man with the telescope."
+    python main.py --live-llm-test
     python main.py --check-config
-
-Later phases add full analysis, detector-only and sense-ranking modes.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-import textwrap
 
 from ambisense.ambiguity import DetectorRegistry
-from ambisense.semantic import SemanticAnalyzer, SpacyEmbeddingBackend
+from ambisense.ambiguity.wordnet_support import wordnet_available
+from ambisense.cli.render import (
+    render_adjudication,
+    render_candidates,
+    render_config_check,
+    render_nlp_analysis,
+    render_sense_rankings,
+    rule,
+)
 from ambisense.config import ConfigError, load_settings
+from ambisense.llm import build_adjudicator
+from ambisense.llm.health import check_server, ollama_pull_hint, ollama_serve_hint
 from ambisense.logging_setup import configure_logging, get_logger
+from ambisense.pipeline import SetupError, analyze, gather_evidence
 from ambisense.preprocessing import (
     InputValidationError,
     LinguisticAnalyzer,
     ModelLoadError,
     clean_and_validate,
 )
-from ambisense.schemas import (
-    AmbiguityCandidate,
-    LinguisticAnalysis,
-    SenseRanking,
-)
+from ambisense.schemas import AdjudicationReport, AdjudicationStatus
 
 logger = get_logger(__name__)
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
 EXIT_CONFIG_ERROR = 2
+#: The report was produced, but at least one candidate has no LLM judgement.
+EXIT_LLM_INCOMPLETE = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,6 +93,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help=(
+            "Full pipeline: rule-based candidates, semantic evidence, then "
+            "LLM adjudication. Requires a running Ollama server."
+        ),
+    )
+    parser.add_argument(
+        "--live-llm-test",
+        action="store_true",
+        help=(
+            "Opt-in: run data/examples/adjudication_cases.json against the "
+            "local Ollama model. Slow on local hardware. Never run by pytest."
+        ),
+    )
+    parser.add_argument(
         "--check-config",
         action="store_true",
         help="Validate config.yaml and the environment, then exit.",
@@ -101,248 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Rendering helpers
-# ---------------------------------------------------------------------------
-
-
-def _rule(title: str = "", width: int = 78) -> str:
-    if not title:
-        return "-" * width
-    return f"--- {title} " + "-" * max(0, width - len(title) - 5)
-
-
-def render_nlp_analysis(analysis: LinguisticAnalysis) -> str:
-    """Render the linguistic analysis as a readable table."""
-    lines: list[str] = []
-    lines.append(_rule("INPUT"))
-    lines.append(analysis.text)
-    lines.append("")
-
-    lines.append(_rule("SENTENCES"))
-    for sentence in analysis.sentences:
-        lines.append(f"  [{sentence.index}] {sentence.text}")
-    lines.append("")
-
-    lines.append(_rule("TOKENS"))
-    header = f"  {'#':>3}  {'TEXT':<14} {'LEMMA':<14} {'POS':<6} {'TAG':<6} {'DEP':<12} HEAD"
-    lines.append(header)
-    lines.append(f"  {'-' * (len(header) - 2)}")
-    for token in analysis.tokens:
-        lines.append(
-            f"  {token.index:>3}  {token.text:<14} {token.lemma:<14} "
-            f"{token.pos:<6} {token.tag:<6} {token.dep:<12} {token.head_text}"
-        )
-    lines.append("")
-
-    lines.append(_rule("NAMED ENTITIES"))
-    if analysis.entities:
-        for entity in analysis.entities:
-            lines.append(f"  {entity.text:<22} {entity.label}")
-    else:
-        lines.append("  (none found)")
-    lines.append("")
-
-    lines.append(_rule("NOUN CHUNKS"))
-    if analysis.noun_chunks:
-        lines.append(
-            f"  {'CHUNK':<24} {'ROOT':<14} {'DEP':<12} {'PLURAL':<8} ANIMATE"
-        )
-        for chunk in analysis.noun_chunks:
-            lines.append(
-                f"  {chunk.text:<24} {chunk.root_text:<14} {chunk.root_dep:<12} "
-                f"{str(chunk.is_plural):<8} {chunk.is_animate_candidate}"
-            )
-    else:
-        lines.append("  (none found)")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _format_evidence(evidence: dict, indent: str = "    ") -> list[str]:
-    """Render an evidence dict as aligned ``key: value`` lines."""
-    lines: list[str] = []
-    for key in sorted(evidence):
-        value = evidence[key]
-        if isinstance(value, list):
-            if value and isinstance(value[0], dict):
-                lines.append(f"{indent}{key}:")
-                for item in value:
-                    summary = ", ".join(f"{k}={v}" for k, v in item.items())
-                    lines.append(f"{indent}  - {summary}")
-                continue
-            value = ", ".join(str(item) for item in value) or "(none)"
-        elif isinstance(value, dict):
-            value = ", ".join(f"{k}={v}" for k, v in value.items())
-        lines.append(f"{indent}{key}: {value}")
-    return lines
-
-
-def render_candidates(
-    text: str,
-    candidates: list[AmbiguityCandidate],
-    detector_names: list[str],
-    *,
-    show_evidence: bool = False,
-    context: str | None = None,
-) -> str:
-    """Render the rule-based detection result for the terminal."""
-    bar = "=" * 70
-    lines = [bar, "AmbiSense - Rule-Based Detection (Phase 2)", bar, ""]
-    lines.append("Input:")
-    lines.append(f"  {text}")
-    if context:
-        lines.append("")
-        lines.append("Context:")
-        lines.append(f"  {context}")
-    lines.append("")
-    lines.append(f"Detectors run: {', '.join(detector_names) or '(none enabled)'}")
-    lines.append(f"Candidates:    {len(candidates)}")
-    lines.append("")
-
-    if not candidates:
-        lines.append("  No ambiguity candidates were found by the rule-based")
-        lines.append("  detectors. This is not proof the text is unambiguous -")
-        lines.append("  see the Limitations section of the README.")
-        lines.append("")
-        lines.append(bar)
-        return "\n".join(lines)
-
-    for position, candidate in enumerate(candidates, start=1):
-        lines.append("-" * 70)
-        lines.append(
-            f"[{position}] {candidate.type_hint.value.upper()}"
-            f"   (detector: {candidate.detector_name},"
-            f" signal strength: {candidate.prior:.2f})"
-        )
-        lines.append("")
-        lines.append("  Span:")
-        lines.append(f"    {candidate.span_text!r} "
-                     f"[chars {candidate.char_start}-{candidate.char_end}]")
-        lines.append("")
-        lines.append("  Reason:")
-        for line in textwrap.wrap(candidate.explanation, width=64):
-            lines.append(f"    {line}")
-        if show_evidence:
-            lines.append("")
-            lines.append("  Evidence:")
-            lines.extend(_format_evidence(candidate.evidence))
-        lines.append("")
-
-    lines.append(bar)
-    lines.append(
-        "Note: 'signal strength' is the strength of the linguistic evidence,"
-    )
-    lines.append(
-        "NOT a probability that the text is ambiguous. Confirming genuine"
-    )
-    lines.append("ambiguity is the job of the LLM layer (Phase 4).")
-    lines.append(bar)
-    return "\n".join(lines)
-
-
-def render_sense_rankings(
-    text: str,
-    rankings: list[SenseRanking],
-    *,
-    context: str | None = None,
-) -> str:
-    """Render Phase 3 sense rankings for the terminal."""
-    bar = "=" * 70
-    lines = [bar, "AmbiSense - Semantic Analysis (Phase 3)", bar, ""]
-    lines.append("Input:")
-    lines.append(f"  {text}")
-    if context:
-        lines.append("")
-        lines.append("Context:")
-        lines.append(f"  {context}")
-    lines.append("")
-
-    if not rankings:
-        lines.append("  No lexical candidates were found, so there are no word")
-        lines.append("  senses to rank. Sense ranking applies to lexical")
-        lines.append("  ambiguity only - run --detect-only to see all candidates.")
-        lines.append("")
-        lines.append(bar)
-        return "\n".join(lines)
-
-    lines.append(f"Lexical candidates analysed: {len(rankings)}")
-    lines.append("")
-
-    for ranking in rankings:
-        lines.append("-" * 70)
-        lines.append(f"Candidate:  {ranking.word}   "
-                     f"(lemma '{ranking.lemma}', {ranking.pos.lower()})")
-        lines.append("")
-
-        if not ranking.status.is_usable:
-            lines.append(f"  Status: {ranking.status.value}")
-            for line in textwrap.wrap(ranking.note, width=64):
-                lines.append(f"  {line}")
-            lines.append("")
-            continue
-
-        lines.append(f"  Context words used: "
-                     f"{', '.join(ranking.context_words) or '(none)'}")
-        lines.append(f"  WordNet senses considered: {len(ranking.senses)} "
-                     f"of {ranking.senses_available} available")
-        lines.append("")
-
-        for sense in ranking.senses:
-            similarity = sense.context_similarity
-            score = "n/a" if similarity is None else f"{similarity:.4f}"
-            lines.append(f"  Rank {sense.rank}:  similarity {score}")
-            lines.append(f"    {sense.sense_key}")
-            for line in textwrap.wrap(sense.definition, width=60):
-                lines.append(f"      {line}")
-            lines.append("")
-
-        margin = "n/a" if ranking.margin is None else f"{ranking.margin:.4f}"
-        lines.append(f"  Margin over runner-up: {margin}")
-        lines.append(f"  Context favours top sense: {ranking.resolved_by_context}")
-        lines.append("")
-        lines.append("  Interpretation:")
-        for line in textwrap.wrap(ranking.note, width=64):
-            lines.append(f"    {line}")
-        lines.append("")
-
-    lines.append(bar)
-    lines.append(
-        "Note: these are cosine SIMILARITY scores between the context and each"
-    )
-    lines.append(
-        "sense gloss. They are not probabilities, and a top rank is evidence"
-    )
-    lines.append(
-        "about the context - not a decision about what the writer meant."
-    )
-    lines.append(bar)
-    return "\n".join(lines)
-
-
-def render_config_check(settings, analyzer_ok: bool, wordnet_ok: bool) -> str:
-    lines = [_rule("CONFIGURATION CHECK")]
-    lines.append(f"  config file      : {settings.project_root / 'config' / 'config.yaml'}")
-    lines.append(f"  LLM provider     : {settings.llm.provider}")
-    lines.append(f"  LLM model        : {settings.llm.model}")
-    lines.append(f"  LLM base URL     : {settings.llm.base_url}")
-    key_state = "present" if settings.llm.has_credentials else "MISSING (degraded mode only)"
-    lines.append(f"  LLM_API_KEY      : {key_state}")
-    lines.append(f"  spaCy model      : {settings.nlp.spacy_model} "
-                 f"[{'ok' if analyzer_ok else 'NOT INSTALLED'}]")
-    lines.append(f"  WordNet corpus   : {'ok' if wordnet_ok else 'NOT DOWNLOADED'}")
-    lines.append(f"  embeddings       : {settings.embeddings.backend}")
-    enabled = [
-        name for name in
-        ("lexical", "syntactic", "referential", "semantic", "scope", "pragmatic")
-        if settings.detectors.is_enabled(name)
-    ]
-    lines.append(f"  detectors on     : {', '.join(enabled) or '(none)'}")
-    lines.append(f"  score threshold  : {settings.scoring.ambiguity_threshold}")
-    lines.append(f"  weights sum      : {settings.scoring.weights.total():.2f}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -355,15 +140,12 @@ def command_check_config(settings) -> int:
         analyzer_ok = False
         logger.error("%s", exc)
 
-    wordnet_ok = True
-    try:
-        from nltk.corpus import wordnet
+    wordnet_ok = wordnet_available()
 
-        wordnet.synsets("bank")
-    except Exception:  # LookupError or ImportError
-        wordnet_ok = False
-
-    print(render_config_check(settings, analyzer_ok, wordnet_ok))
+    # The LLM server is reported but not treated as fatal: every mode except
+    # --analyze and --live-llm-test works without it.
+    server = check_server(settings.llm)
+    print(render_config_check(settings, analyzer_ok, wordnet_ok, server))
     return EXIT_OK if (analyzer_ok and wordnet_ok) else EXIT_CONFIG_ERROR
 
 
@@ -397,8 +179,8 @@ def command_detect_only(
 
     if cleaned.context:
         logger.info(
-            "Context was recorded but does not yet influence detection; "
-            "context-aware analysis arrives in Phase 3."
+            "The rule-based detectors do not use context. Context is used by "
+            "--analyze-semantics and --analyze."
         )
     return EXIT_OK
 
@@ -412,36 +194,63 @@ def command_analyze_semantics(
 
     Makes no network call and uses no LLM.
     """
-    cleaned = clean_and_validate(text, context, settings.nlp)
-    for warning in cleaned.warnings:
-        logger.warning("%s", warning)
-
-    analyzer = LinguisticAnalyzer(settings.nlp.spacy_model)
-    analysis = analyzer.analyze(cleaned.text)
-    context_analysis = (
-        analyzer.analyze(cleaned.context) if cleaned.context else None
-    )
-
-    candidates = DetectorRegistry(settings.detectors).run(analysis)
-
-    backend = SpacyEmbeddingBackend(analyzer.nlp)
-    if not backend.has_vectors:
-        print(
-            f"Semantic analysis needs a spaCy model with word vectors. "
-            f"'{settings.nlp.spacy_model}' has none - install en_core_web_md.",
-            file=sys.stderr,
-        )
-        return EXIT_CONFIG_ERROR
-
-    semantic = SemanticAnalyzer(settings.semantic_analysis, backend)
-    rankings = semantic.analyze_candidates(
-        candidates, analysis, context_analysis
-    )
-
+    evidence = gather_evidence(settings, text, context)
     print(render_sense_rankings(
-        cleaned.text, rankings, context=cleaned.context
+        evidence.text, evidence.rankings, context=evidence.context
     ))
     return EXIT_OK
+
+
+def _exit_code_for(report: AdjudicationReport) -> int:
+    """0 when every candidate was judged; 3 when any judgement is missing."""
+    if any(a.status is not AdjudicationStatus.ADJUDICATED
+           for a in report.adjudications):
+        return EXIT_LLM_INCOMPLETE
+    return EXIT_OK
+
+
+def command_analyze(settings, text: str, context: str | None) -> int:
+    """Full pipeline: evidence from Phases 1-3, then LLM adjudication."""
+    report = analyze(settings, text, context)
+    print(render_adjudication(report))
+    return _exit_code_for(report)
+
+
+def command_live_llm_test(settings) -> int:
+    """Opt-in: run the documented adjudication cases against the local model.
+
+    Never invoked by pytest. Requires a running Ollama server with the
+    configured model installed; checked up front so a missing server fails
+    in seconds rather than after the first slow request.
+    """
+    server = check_server(settings.llm)
+    if not server.ready:
+        reason = (
+            f"model '{settings.llm.model}' is not installed "
+            f"({ollama_pull_hint(settings.llm.model)})"
+            if server.reachable
+            else f"no Ollama server at {settings.llm.base_url} "
+                 f"({ollama_serve_hint()})"
+        )
+        print(f"--live-llm-test cannot run: {reason}. No request was sent.",
+              file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    cases_path = settings.project_root / "data" / "examples" / "adjudication_cases.json"
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))["cases"]
+    adjudicator = build_adjudicator(settings)
+
+    worst = EXIT_OK
+    for number, case in enumerate(cases, start=1):
+        print()
+        print(f"#### Case {number}/{len(cases)}: {case['id']}")
+        print(f"#### Reviewer note: {case['what_to_check']}")
+        report = analyze(
+            settings, case["text"], case.get("context"), adjudicator=adjudicator
+        )
+        print(render_adjudication(report))
+        worst = max(worst, _exit_code_for(report))
+    return worst
 
 
 def command_dump_nlp(settings, text: str, context: str | None) -> int:
@@ -455,7 +264,7 @@ def command_dump_nlp(settings, text: str, context: str | None) -> int:
 
     if cleaned.context:
         context_analysis = analyzer.analyze(cleaned.context)
-        print(_rule("CONTEXT ANALYSIS"))
+        print(rule("CONTEXT ANALYSIS"))
         print(render_nlp_analysis(context_analysis))
     return EXIT_OK
 
@@ -481,9 +290,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_config:
         return command_check_config(settings)
 
+    if args.live_llm_test:
+        try:
+            return command_live_llm_test(settings)
+        except (ModelLoadError, SetupError) as exc:
+            print(f"Setup error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_ERROR
+
     if not args.text:
         print("No text supplied. Try:\n"
               '  python main.py --detect-only "I saw the man with the telescope."\n'
+              '  python main.py --analyze "I saw the man with the telescope."\n'
               '  python main.py --analyze-semantics "I deposited money at the bank."\n'
               '  python main.py --dump-nlp "I saw the man with the telescope."\n'
               "  python main.py --check-config", file=sys.stderr)
@@ -500,16 +317,18 @@ def main(argv: list[str] | None = None) -> int:
             return command_analyze_semantics(
                 settings, args.text, args.context
             )
-        print("Full analysis (with LLM reasoning) is implemented in a later "
-              "phase. Use --detect-only for rule-based candidate detection, "
-              "--analyze-semantics for WordNet sense ranking, or --dump-nlp "
-              "for the NLP layer output.",
+        if args.analyze:
+            return command_analyze(settings, args.text, args.context)
+        print("Choose a mode: --analyze (full pipeline with LLM "
+              "adjudication), --detect-only (rule-based candidates), "
+              "--analyze-semantics (WordNet sense ranking) or --dump-nlp "
+              "(NLP layer output).",
               file=sys.stderr)
         return EXIT_USER_ERROR
     except InputValidationError as exc:
         print(f"Input error: {exc}", file=sys.stderr)
         return EXIT_USER_ERROR
-    except ModelLoadError as exc:
+    except (ModelLoadError, SetupError) as exc:
         print(f"Setup error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 

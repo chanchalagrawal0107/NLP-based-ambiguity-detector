@@ -18,7 +18,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -79,41 +79,6 @@ class AmbiguityType(str, Enum):
             "discourse": cls.PRAGMATIC,
         }
         return aliases.get(text, cls.UNKNOWN)
-
-
-class ClarityVerdict(str, Enum):
-    """How the system classifies the *overall* clarity of the input.
-
-    Section 10 of the project brief: not every unclear sentence is ambiguous.
-    Separating these five outcomes is what stops the system from labelling
-    "The movie was good" as ambiguous.
-    """
-
-    AMBIGUOUS = "ambiguous"
-    VAGUE = "vague"
-    UNDERSPECIFIED = "underspecified"
-    INSUFFICIENT_CONTEXT = "insufficient_context"
-    CLEAR = "clear"
-
-    @classmethod
-    def coerce(cls, value: Any) -> "ClarityVerdict":
-        if isinstance(value, cls):
-            return value
-        text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
-        for member in cls:
-            if text == member.value:
-                return member
-        aliases = {
-            "unambiguous": cls.CLEAR,
-            "clear_text": cls.CLEAR,
-            "not_ambiguous": cls.CLEAR,
-            "imprecise": cls.VAGUE,
-            "subjective": cls.VAGUE,
-            "incomplete": cls.UNDERSPECIFIED,
-            "missing_context": cls.INSUFFICIENT_CONTEXT,
-            "needs_context": cls.INSUFFICIENT_CONTEXT,
-        }
-        return aliases.get(text, cls.CLEAR)
 
 
 class AnalysisMode(str, Enum):
@@ -356,105 +321,236 @@ class Interpretation(BaseModel):
     )
 
 
-class AmbiguityFinding(BaseModel):
-    """One adjudicated ambiguity: the LLM's verdict on a candidate span."""
+# ---------------------------------------------------------------------------
+# 4b. Phase 4 adjudication models (candidate-level LLM contract)
+#
+# An earlier, sentence-level contract ("is this sentence ambiguous?") was
+# replaced by the candidate-level contract below: a narrower, testable
+# question per rule-based candidate instead of one verdict for the whole
+# sentence.
+# ---------------------------------------------------------------------------
 
-    text_span: str
-    type: AmbiguityType = AmbiguityType.UNKNOWN
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    interpretations: list[Interpretation] = Field(default_factory=list)
-    source_of_ambiguity: str = Field(
-        default="",
-        description="What linguistic property causes the ambiguity.",
-    )
-    context_resolved: bool = False
-    context_effect: str = Field(
-        default="",
-        description="How the supplied context changes the reading, if at all.",
-    )
-    rewrites: list[str] = Field(default_factory=list)
 
-    # -- filled in by the pipeline, not by the LLM --
-    char_start: Optional[int] = None
-    char_end: Optional[int] = None
-    detector_support: list[str] = Field(
-        default_factory=list,
-        description="Names of rule-based detectors that also flagged this span.",
-    )
-    ambiguity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+class AdjudicationVerdict(str, Enum):
+    """The LLM's judgement on one rule-based candidate."""
 
-    @field_validator("type", mode="before")
+    GENUINE_AMBIGUITY = "genuine_ambiguity"
+    NOT_AMBIGUOUS = "not_ambiguous"
+    UNCERTAIN = "uncertain"
+
     @classmethod
-    def _coerce_type(cls, value: Any) -> AmbiguityType:
-        return AmbiguityType.coerce(value)
+    def parse(cls, value: Any) -> "AdjudicationVerdict":
+        """Accept known spellings; **reject** anything unrecognised.
+
+        Unlike ``AmbiguityType.coerce``, an unknown verdict is *not* mapped to
+        a default. Turning an unreadable verdict into ``uncertain`` would
+        convert a broken response into an answer, so it raises instead and
+        the candidate is reported as an invalid response.
+        """
+        if isinstance(value, cls):
+            return value
+        text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        for member in cls:
+            if text == member.value:
+                return member
+        aliases = {
+            "genuine": cls.GENUINE_AMBIGUITY,
+            "ambiguous": cls.GENUINE_AMBIGUITY,
+            "genuinely_ambiguous": cls.GENUINE_AMBIGUITY,
+            "not_genuine": cls.NOT_AMBIGUOUS,
+            "not_genuinely_ambiguous": cls.NOT_AMBIGUOUS,
+            "unambiguous": cls.NOT_AMBIGUOUS,
+            "false_positive": cls.NOT_AMBIGUOUS,
+            "unsure": cls.UNCERTAIN,
+            "undetermined": cls.UNCERTAIN,
+        }
+        if text in aliases:
+            return aliases[text]
+        raise ValueError(
+            f"unrecognised verdict {value!r}; expected one of "
+            f"{[member.value for member in cls]}"
+        )
+
+
+class AdjudicationStatus(str, Enum):
+    """Whether an LLM judgement exists for a candidate, and if not, why.
+
+    A failure is never reported as ``not_ambiguous``: "the API was down" and
+    "the sentence is clear" are different facts.
+    """
+
+    ADJUDICATED = "adjudicated"
+    LLM_NOT_CONFIGURED = "llm_not_configured"
+    LLM_UNAVAILABLE = "llm_unavailable"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
+
+
+class RewriteStatus(str, Enum):
+    """Outcome of the separate rewrite-generation step."""
+
+    GENERATED = "generated"
+    NOT_APPLICABLE = "not_applicable"
+    LLM_UNAVAILABLE = "llm_unavailable"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
+
+
+#: Spellings a model commonly uses to mean "no sense selected".
+_NULL_SENSE_SPELLINGS = frozenset({"", "none", "null", "n/a", "not_applicable"})
+
+
+def parse_optional_confidence(value: Any) -> Optional[float]:
+    """Parse a self-reported confidence **without** inventing one.
+
+    ``clamp_confidence`` returns 0.5 for unreadable input, which is acceptable
+    for the Phase 1 contract but would manufacture a confidence here. This
+    returns ``None`` instead, so a missing number stays visibly missing.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+    if number != number:  # NaN
+        return None
+    if _PERCENT_FLOOR <= number <= 100.0:
+        number = number / 100.0
+    return max(0.0, min(1.0, number))
+
+
+class LLMJudgement(BaseModel):
+    """What the LLM returns for one candidate, after validation.
+
+    ``confidence`` is the model's **self-reported** confidence in its verdict.
+    It is not a calibrated probability that the verdict is correct.
+    """
+
+    candidate_id: str = Field(min_length=1)
+    verdict: AdjudicationVerdict
+    interpretations: list[Interpretation] = Field(default_factory=list)
+    explanation: str = Field(min_length=1)
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    selected_sense: Optional[str] = Field(
+        default=None,
+        description=(
+            "The Phase 3 sense key (e.g. 'crane.n.04') the model judges to be "
+            "the meaning of the span, chosen from the senses it was shown; "
+            "None when it selects none of them. Whether the key is one it was "
+            "actually shown is checked per candidate by the parser. The model "
+            "does NOT report agreement with Phase 3 - that is derived in code."
+        ),
+    )
+
+    @field_validator("selected_sense", mode="before")
+    @classmethod
+    def _parse_selected_sense(cls, value: Any) -> Optional[str]:
+        """Normalise explicit "no selection" spellings; reject non-strings.
+
+        A number, list or object is malformed and raises, so it becomes a
+        validation problem rather than being guessed into None.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(
+                f"selected_sense must be a sense key string or null, "
+                f"got {type(value).__name__}"
+            )
+        text = value.strip()
+        return None if text.lower() in _NULL_SENSE_SPELLINGS else text
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _parse_verdict(cls, value: Any) -> AdjudicationVerdict:
+        return AdjudicationVerdict.parse(value)
 
     @field_validator("confidence", mode="before")
     @classmethod
-    def _clamp_confidence(cls, value: Any) -> float:
-        """Clamp rather than reject: a model returning 1.2 or "0.8" is common."""
-        return clamp_confidence(value)
+    def _parse_confidence(cls, value: Any) -> Optional[float]:
+        return parse_optional_confidence(value)
 
-    @field_validator("rewrites", mode="before")
+    @field_validator("explanation", mode="before")
     @classmethod
-    def _clean_rewrites(cls, value: Any) -> list[str]:
-        if isinstance(value, str):
-            value = [value]
+    def _strip_explanation(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("interpretations", mode="before")
+    @classmethod
+    def _normalise_interpretations(cls, value: Any) -> list[dict[str, str]]:
+        """Accept strings or objects; drop blanks and exact duplicates."""
         if not isinstance(value, list):
             return []
-        return [str(item).strip() for item in value if str(item).strip()]
+        cleaned: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in value:
+            if isinstance(item, str):
+                item = {"meaning": item}
+            if not isinstance(item, dict):
+                continue
+            meaning = str(item.get("meaning") or "").strip()
+            key = meaning.lower()
+            if not meaning or key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({
+                "meaning": meaning,
+                "explanation": str(item.get("explanation") or "").strip(),
+            })
+        return cleaned
+
+    @model_validator(mode="after")
+    def _genuine_needs_two_readings(self) -> "LLMJudgement":
+        """A genuine ambiguity with fewer than two readings is self-contradictory."""
+        if (self.verdict is AdjudicationVerdict.GENUINE_AMBIGUITY
+                and len(self.interpretations) < 2):
+            raise ValueError(
+                "verdict genuine_ambiguity requires at least two distinct "
+                "interpretations"
+            )
+        return self
 
 
-class LLMAnalysis(BaseModel):
-    """The complete structured response required from the LLM.
+class CandidateAdjudication(BaseModel):
+    """One candidate, the evidence it was judged on, and the outcome."""
 
-    Anything the model returns outside this shape is rejected and a repair
-    round-trip is attempted (see ``llm/parser.py``).
-    """
-
-    ambiguous: bool = False
-    overall_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    clarity_verdict: ClarityVerdict = ClarityVerdict.CLEAR
-    ambiguities: list[AmbiguityFinding] = Field(default_factory=list)
-    reasoning_note: str = Field(
+    candidate_id: str
+    candidate: AmbiguityCandidate
+    sense_ranking: Optional[SenseRanking] = None
+    status: AdjudicationStatus
+    judgement: Optional[LLMJudgement] = None
+    error: str = Field(
         default="",
-        description="One-line summary of why this verdict was reached.",
+        description="Why no judgement exists. Never contains secrets.",
+    )
+    rewrites: list[str] = Field(default_factory=list)
+    rewrite_status: RewriteStatus = RewriteStatus.NOT_APPLICABLE
+    rewrite_error: str = ""
+
+    # -- application-derived, never taken from the LLM reply --
+    phase3_top_sense: Optional[str] = Field(
+        default=None,
+        description="Phase 3's rank-1 sense key, when usable ranking evidence exists.",
+    )
+    agrees_with_phase3: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Computed by application code: selected_sense == phase3_top_sense. "
+            "None when there is no Phase 3 top sense or the LLM selected no "
+            "sense. Not an LLM prediction."
+        ),
     )
 
-    @field_validator("clarity_verdict", mode="before")
-    @classmethod
-    def _coerce_verdict(cls, value: Any) -> ClarityVerdict:
-        return ClarityVerdict.coerce(value)
-
-    @field_validator("overall_confidence", mode="before")
-    @classmethod
-    def _clamp_overall(cls, value: Any) -> float:
-        return clamp_confidence(value)
-
-    @field_validator("ambiguous", mode="before")
-    @classmethod
-    def _coerce_bool(cls, value: Any) -> bool:
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "yes", "1"}
-        return bool(value)
+    @property
+    def is_genuine(self) -> bool:
+        return (
+            self.judgement is not None
+            and self.judgement.verdict is AdjudicationVerdict.GENUINE_AMBIGUITY
+        )
 
 
 # ---------------------------------------------------------------------------
 # 5. Final report
 # ---------------------------------------------------------------------------
-
-
-class ScoreBreakdown(BaseModel):
-    """Transparent, per-component view of the ambiguity score.
-
-    Shown in the UI so the number is explainable rather than a black box.
-    """
-
-    llm_confidence: float = 0.0
-    detector_evidence: float = 0.0
-    interpretation_count: float = 0.0
-    context_uncertainty: float = 0.0
-    weighted_total: float = 0.0
-    formula: str = ""
 
 
 class PipelineDiagnostics(BaseModel):
@@ -465,30 +561,34 @@ class PipelineDiagnostics(BaseModel):
     llm_provider: str = ""
     llm_model: str = ""
     llm_attempts: int = 0
+    llm_prompt_tokens: Optional[int] = Field(
+        default=None,
+        description="Prompt tokens reported by the provider (measured, summed).",
+    )
+    llm_completion_tokens: Optional[int] = Field(
+        default=None,
+        description="Completion tokens reported by the provider (measured, summed).",
+    )
     repair_attempted: bool = False
     cache_hit: bool = False
     elapsed_seconds: float = 0.0
     warnings: list[str] = Field(default_factory=list)
-    detectors_run: list[str] = Field(default_factory=list)
     candidates_found: int = 0
     candidates_confirmed: int = 0
 
 
-class AmbiguityReport(BaseModel):
-    """The object returned by the pipeline and rendered by every interface."""
+class AdjudicationReport(BaseModel):
+    """The object returned by the pipeline and rendered by every interface.
+
+    Deliberately has no sentence-level verdict or score: aggregating
+    candidate-level judgements into one number would hide the per-candidate
+    evidence this project is built to keep visible.
+    """
 
     text: str
     context: Optional[str] = None
-    is_ambiguous: bool = False
-    ambiguity_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    clarity_verdict: ClarityVerdict = ClarityVerdict.CLEAR
-    findings: list[AmbiguityFinding] = Field(default_factory=list)
-    score_breakdown: Optional[ScoreBreakdown] = None
-    sense_rankings: list[SenseRanking] = Field(default_factory=list)
-    candidates: list[AmbiguityCandidate] = Field(default_factory=list)
-    linguistic_analysis: Optional[LinguisticAnalysis] = None
+    adjudications: list[CandidateAdjudication] = Field(default_factory=list)
     diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)
-    summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -496,25 +596,5 @@ class AmbiguityReport(BaseModel):
 # ---------------------------------------------------------------------------
 
 # Values at or above this are interpreted as percentages rather than as
-# out-of-range probabilities. See clamp_confidence below.
+# out-of-range probabilities. See ``parse_optional_confidence`` above.
 _PERCENT_FLOOR = 10.0
-
-
-def clamp_confidence(value: Any) -> float:
-    """Coerce any model-produced confidence into a float in [0, 1].
-
-    Handles the three failure modes seen in practice: a string ("0.8"), a
-    percentage (85), and a slightly out-of-range float (1.2).
-
-    The percentage branch requires a value of at least ``_PERCENT_FLOOR``.
-    Without that floor, a model overshooting to 1.4 would be read as "1.4%"
-    and collapse to 0.014 - a confident answer turned into a near-zero one.
-    Values between 1 and the floor are treated as overshoot and clamped to 1.
-    """
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return 0.5
-    if _PERCENT_FLOOR <= number <= 100.0:
-        number = number / 100.0
-    return max(0.0, min(1.0, number))
