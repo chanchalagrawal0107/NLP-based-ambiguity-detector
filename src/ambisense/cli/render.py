@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import textwrap
 
+from ambisense.evaluation.runner import EvaluationResults
 from ambisense.llm.health import ServerStatus, ollama_pull_hint, ollama_serve_hint
 from ambisense.schemas import (
     AdjudicationReport,
@@ -272,14 +273,14 @@ def render_adjudication(report: AdjudicationReport) -> str:
 
     diagnostics = report.diagnostics
     if not report.adjudications:
-        lines += [
-            "  No rule-based candidates were found, so nothing was sent to the",
-            "  LLM. This is not proof the text is unambiguous - see the README",
-            "  limitations.", "", bar,
-        ]
+        lines += _wrap(report.summary.explanation, "  ")
+        lines += ["", bar]
         return "\n".join(lines)
 
     lines.append(f"Candidates adjudicated: {len(report.adjudications)}")
+    lines.append("")
+    lines.append(f"Sentence verdict: {report.summary.verdict.value.upper()}")
+    lines += _wrap(report.summary.explanation, "  ")
     lines.append("")
 
     for item in report.adjudications:
@@ -392,4 +393,64 @@ def render_config_check(
         if settings.detectors.is_enabled(name)
     ]
     lines.append(f"  detectors on     : {', '.join(enabled) or '(none)'}")
+    return "\n".join(lines)
+
+
+def render_evaluation_report(results: EvaluationResults) -> str:
+    """Render Phase 7 evaluation output: metrics, then a per-case table.
+
+    Never shows the confident-only accuracy without the pessimistic number
+    beside it - an abstention (UNCERTAIN/INCOMPLETE) is not a wrong answer,
+    but it is not a free pass either.
+    """
+    bar = "=" * 70
+    metrics = results.metrics
+    lines = [bar, "AmbiSense - Evaluation (Phase 7)", bar, ""]
+    lines.append(
+        f"Cases: {metrics.total}   Confident: {metrics.confident}   "
+        f"Abstained: {metrics.abstained} ({metrics.abstention_rate:.0%})"
+    )
+    lines.append("")
+
+    if metrics.confident == 0:
+        lines.append("No confident predictions were made - every case was UNCERTAIN")
+        lines.append("or INCOMPLETE. Accuracy/precision/recall/F1 cannot be honestly")
+        lines.append("computed on zero confident predictions.")
+    else:
+        lines.append(f"Accuracy (confident predictions only): {metrics.accuracy:.3f}")
+        lines.append(
+            f"Precision: {metrics.precision:.3f}   "
+            f"Recall: {metrics.recall:.3f}   F1: {metrics.f1:.3f}"
+        )
+        c = metrics.confusion
+        lines.append(
+            f"Confusion matrix: TP={c['tp']} FP={c['fp']} "
+            f"TN={c['tn']} FN={c['fn']}"
+        )
+    lines.append(
+        f"Pessimistic accuracy (every abstention counted as wrong, over all "
+        f"{metrics.total} cases): {metrics.pessimistic_accuracy:.3f}"
+    )
+    lines.append("")
+
+    lines.append("-" * 70)
+    lines.append(f"{'ID':<28} {'LABEL':<14} {'VERDICT':<14} RESULT")
+    for outcome in results.outcomes:
+        result = (
+            "ABSTAIN" if outcome.abstained
+            else "CORRECT" if outcome.correct
+            else "WRONG"
+        )
+        lines.append(
+            f"{outcome.case_id:<28} {outcome.label:<14} "
+            f"{outcome.verdict.value:<14} {result}"
+        )
+    lines.append("")
+
+    lines.append(bar)
+    lines.append("Note: a small, single-annotator dataset run on one local model.")
+    lines.append("These numbers describe this machine and this dataset only - they")
+    lines.append("are not a general accuracy claim (see README Sections 13.16 and")
+    lines.append("Future Work for the same caveat applied elsewhere).")
+    lines.append(bar)
     return "\n".join(lines)

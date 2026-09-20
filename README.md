@@ -1,14 +1,5 @@
 # AmbiSense — NLP-Based Ambiguity Detection and Resolution System
 
-> **Status: Work in progress (Phase 4 of 8 complete).**
-> This repository currently contains the configuration foundation, the
-> traditional NLP analysis layer, the rule-based ambiguity **candidate**
-> detection layer, the context-based WordNet sense-ranking layer, and an
-> **LLM adjudication layer** that judges those candidates. Sentence-level
-> ambiguity scoring, the web interface and formal evaluation are **not
-> implemented yet** and are clearly marked as planned throughout this
-> document.
-
 ---
 
 ## Table of Contents
@@ -26,20 +17,23 @@
 11. [Phase 2 — Rule-Based Ambiguity Detection](#11-phase-2--rule-based-ambiguity-detection-complete)
 12. [Phase 3 — Semantic Analysis](#12-phase-3--semantic-analysis-complete)
 13. [Phase 4 — LLM Adjudication](#13-phase-4--llm-adjudication-complete)
-14. [Installation](#14-installation)
-15. [Current CLI Usage](#15-current-cli-usage)
-16. [Example Commands](#16-example-commands)
-17. [Example NLP Output](#17-example-nlp-output)
-18. [Configuration](#18-configuration)
-19. [Environment Variables](#19-environment-variables)
-20. [Testing](#20-testing)
-21. [Project Structure](#21-project-structure)
-22. [Design Decisions](#22-design-decisions)
-23. [Known Limitations](#23-known-limitations)
-24. [Planned Development Phases](#24-planned-development-phases)
-25. [Technology Stack](#25-technology-stack)
-26. [Future Work](#26-future-work)
-27. [License](#27-license)
+14. [Phase 5 — Sentence-Level Verdict](#14-phase-5--sentence-level-verdict-complete)
+15. [Phase 6 — Streamlit Interface](#15-phase-6--streamlit-interface-complete)
+16. [Phase 7 — Evaluation](#16-phase-7--evaluation-complete)
+17. [Installation](#17-installation)
+18. [Current CLI Usage](#18-current-cli-usage)
+19. [Example Commands](#19-example-commands)
+20. [Example NLP Output](#20-example-nlp-output)
+21. [Configuration](#21-configuration)
+22. [Environment Variables](#22-environment-variables)
+23. [Testing](#23-testing)
+24. [Project Structure](#24-project-structure)
+25. [Design Decisions](#25-design-decisions)
+26. [Known Limitations](#26-known-limitations)
+27. [Development Phases](#27-development-phases)
+28. [Technology Stack](#28-technology-stack)
+29. [Future Work](#29-future-work)
+30. [License](#30-license)
 
 ---
 
@@ -48,23 +42,25 @@
 AmbiSense is an academic prototype that aims to detect ambiguity in English
 text, explain why the ambiguity occurs, and suggest clearer rewrites.
 
-The intended design is a **hybrid pipeline**: traditional NLP techniques locate
-*candidate* ambiguities using observable linguistic structure, and a Large
-Language Model, accessed through an API, then judges whether each candidate is
-a genuine ambiguity and produces the interpretations, explanations and
-rewrites.
+The intended design is a hybrid pipeline: traditional NLP techniques locate
+candidate ambiguities using observable linguistic structure, and a Large
+Language Model then judges whether each candidate is a genuine ambiguity and
+produces interpretations and explanations. Optional rewrite generation is
+available but disabled in the final demonstration configuration.
 
 The two components have deliberately separate responsibilities. Rule-based
 analysis answers *"where in this sentence is there a structural reason to
 suspect more than one reading?"* The LLM answers *"is that reading actually
 available to a human reader, and how would you phrase it unambiguously?"*
 
-**What exists today** is that pipeline end to end at the level of individual
-candidates: configuration, input validation, spaCy linguistic analysis,
-rule-based candidate detection, context-based WordNet sense ranking, and LLM
-adjudication of each candidate with interpretations and rewrites. What remains
-is aggregation into one sentence-level report and score, the interface, and
-formal evaluation - described in [Section 24](#24-planned-development-phases).
+**What exists today** is that pipeline end to end: configuration, input
+validation, spaCy linguistic analysis, rule-based candidate detection,
+context-based WordNet sense ranking, LLM adjudication of each candidate with
+interpretations and rewrites, a deterministic sentence-level verdict, a CLI, a
+Streamlit interface, and an evaluation harness with a labelled dataset. What
+it does **not** do is produce a numeric ambiguity score - that was a
+deliberate decision, explained in [Section 14](#14-phase-5--sentence-level-verdict-complete).
+See [Section 27](#27-development-phases) for the phase list.
 
 ---
 
@@ -140,9 +136,10 @@ lets each component compensate for the other's characteristic failure mode.
    LLM text. *(Implemented — Phase 4.)*
 7. Distinguish ambiguity from vagueness, underspecification and insufficient
    context.
-8. Provide a transparent, explainable ambiguity score. *(Planned — Phase 5.)*
+8. Provide a transparent, explainable sentence-level result. *(Implemented —
+   Phase 5, as a count-based verdict rather than a numeric score.)*
 9. Evaluate the system on a labelled dataset and report honest metrics.
-   *(Planned — Phase 7.)*
+   *(Implemented — Phase 7, on a small single-annotator set.)*
 10. Document limitations truthfully rather than overstating capability.
 
 ---
@@ -288,15 +285,17 @@ force a confident label onto a case it cannot classify.
 
 **A second caveat.** The detectors report *structural possibility*, not
 ambiguity. They are deliberately tuned for high recall and produce false
-positives - see [Known Limitations](#23-known-limitations) for measured
+positives - see [Known Limitations](#26-known-limitations) for measured
 examples.
 
 ---
 
 ## 7. Proposed System Architecture
 
-The diagram shows the **complete planned** pipeline. Only the components
-marked *IMPLEMENTED* exist in this repository today.
+The diagram shows the pipeline as implemented. `pipeline/runner.py::analyze`
+is the single entry point that runs everything from evidence gathering to the
+sentence verdict; the CLI, the Streamlit app and the evaluation harness all
+call it, so the three interfaces cannot drift apart.
 
 ```mermaid
 flowchart TD
@@ -308,21 +307,17 @@ flowchart TD
         D["<b>Rule-Based Candidate Detection</b><br/>six detectors + registry, high recall<br/><i>ambiguity/</i>"]
         E["<b>Semantic Analysis</b><br/>WordNet senses ranked against<br/>context by cosine similarity<br/><i>semantic/</i>"]
         F["<b>LLM Adjudication</b><br/>per-candidate verdict, interpretations,<br/>rewrites; validated JSON<br/><i>llm/</i>"]
-        B --> C --> D --> E --> F
+        G["<b>Sentence Verdict</b><br/>count-based rollup by fixed precedence,<br/>no numeric score<br/><i>pipeline/summary.py</i>"]
+        B --> C --> D --> E --> F --> G
     end
 
-    F --> G
-
-    subgraph PLANNED ["Planned - Phases 5 and 6"]
-        G["<b>Scoring and Sentence-Level Report</b><br/>transparent ambiguity score,<br/>aggregated verdict<br/><i>Phase 5</i>"]
-        I["<b>User Interface</b><br/>Streamlit<br/><i>Phase 6</i>"]
-        G --> I
-    end
-
-    F -.->|"available today"| J["CLI output<br/>--analyze<br/>--analyze-semantics<br/>--detect-only<br/>--dump-nlp"]
+    G --> H["<b>CLI</b><br/>main.py"]
+    G --> I["<b>Streamlit UI</b><br/>app/streamlit_app.py"]
+    G --> J["<b>Evaluation</b><br/>--evaluate on 23 labelled sentences<br/><i>evaluation/</i>"]
 
     style BUILT fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    style PLANNED fill:#fff8e1,stroke:#f9a825,stroke-width:2px,stroke-dasharray: 6 4
+    style H fill:#e8f5e9,stroke:#2e7d32
+    style I fill:#e8f5e9,stroke:#2e7d32
     style J fill:#e8f5e9,stroke:#2e7d32
 ```
 
@@ -344,8 +339,9 @@ the system keeps working when the API does not. Phase 4 already behaves this
 way per candidate: with no key, a timeout or an invalid reply, the rule-based
 and semantic evidence is still reported and the candidate is marked
 `llm_not_configured`, `llm_unavailable` or `llm_invalid_response` - never
-silently "not ambiguous". *(The sentence-level `output.allow_degraded_mode`
-switch is Phase 5 work.)*
+silently "not ambiguous" - and the sentence-level verdict becomes `incomplete`
+([Section 14](#14-phase-5--sentence-level-verdict-complete)). There is no
+degraded-mode switch: this is simply what happens.
 
 ---
 
@@ -369,19 +365,17 @@ switch is Phase 5 work.)*
 | Evidence package, prompt builder, response parser | **Implemented** | `src/ambisense/llm/` |
 | Candidate-level LLM adjudication, repair, rewrites | **Implemented** | `src/ambisense/llm/adjudicator.py` |
 | Bounded retry, error mapping, response cache | **Implemented** | `src/ambisense/llm/client.py`, `cache.py` |
-| CLI: `--check-config`, `--dump-nlp`, `--detect-only`, `--analyze-semantics`, `--analyze`, `--live-llm-test` | **Implemented** | `main.py` |
-| Automated tests (363) | **Implemented** | `tests/` |
-| Live run of the 7 evaluation cases on two local models | **Done — manually inspected, see 13.16** | `data/examples/adjudication_cases.json` |
-| Sentence-level verdict and ambiguity scoring | *Planned — Phase 5* | — |
-| Streamlit user interface | *Planned — Phase 6* | — |
-| Evaluation dataset | *Planned — Phase 7* | — |
-| Evaluation metrics | *Planned — Phase 7* | — |
+| Pipeline orchestration (evidence gathering, `analyze`) | **Implemented** | `src/ambisense/pipeline/` |
+| Sentence-level verdict (count-based, no numeric score) | **Implemented** | `src/ambisense/pipeline/summary.py` |
+| CLI: `--check-config`, `--dump-nlp`, `--detect-only`, `--analyze-semantics`, `--analyze`, `--live-llm-test`, `--evaluate` | **Implemented** | `main.py`, `src/ambisense/cli/` |
+| Streamlit user interface | **Implemented** | `app/streamlit_app.py` |
+| Evaluation dataset (23 labelled sentences, one annotator) | **Implemented** | `data/evaluation/sentence_labels.json` |
+| Evaluation metrics and runner | **Implemented** | `src/ambisense/evaluation/` |
+| Automated tests (396) | **Implemented** | `tests/` |
+| Live run of the 7 demo cases on two local models | **Done — manually inspected, see 13.16** | `data/examples/adjudication_cases.json` |
+| Evaluation run on the local model | **Done — see 16.4** | `--evaluate` |
+| Numeric ambiguity score | *Deliberately not built - see Section 14* | — |
 | Deployment | *Not planned for this submission* | — |
-
-**Note on empty directories.** `app/`, `docs/` and `data/evaluation/` exist in
-the repository but are currently empty. The package directories `scoring/` and
-`evaluation/` contain only an `__init__.py` placeholder. They are scaffolding
-for the phases above, not implemented modules.
 
 ---
 
@@ -402,7 +396,7 @@ Phase 0 established configuration, dependency management and logging.
 ### Packaging
 
 `pyproject.toml` declares a `src/` layout package so that both `main.py` and
-the planned Streamlit app can `from ambisense... import ...` after a single
+the Streamlit app can `from ambisense... import ...` after a single
 editable install. This avoids `sys.path` manipulation, which is a common source
 of import failures when the same project is launched from two different entry
 points.
@@ -415,13 +409,14 @@ Pydantic models (`LLMConfig`, `NLPConfig`, `DetectorsConfig`, `ScoringConfig`
 and others), so a typo in the YAML produces a validation error naming the
 field, rather than a `KeyError` later during analysis.
 
-Note that `config.yaml` already contains settings for planned components — for
-example detector thresholds and scoring weights. Those sections are read and
-validated today, but nothing consumes them yet.
+Configuration grew with the project: later phases added the `detectors`,
+`semantic_analysis`, `llm` and `adjudication` sections. Every section that
+exists is consumed by code, with one exception noted in
+[Section 21](#21-configuration).
 
 ### Logging
 
-`configure_logging()` is idempotent. This matters for the planned Streamlit
+`configure_logging()` is idempotent. This matters for the Streamlit
 interface, which re-executes the script on every user interaction and would
 otherwise attach a duplicate handler each time, producing repeated log lines.
 
@@ -436,16 +431,20 @@ groups:
 
 1. **Linguistic models** — `TokenInfo`, `SentenceInfo`, `EntityInfo`,
    `NounChunkInfo`, `LinguisticAnalysis`.
-2. **Detection models** — `AmbiguityCandidate`, the object the planned
-   detectors will emit.
-3. **Semantic models** — `SenseOption`, `SenseRanking`, for the planned
-   WordNet layer.
-4. **LLM contract and report models** — `Interpretation`, `AmbiguityFinding`,
-   `LLMAnalysis`, `ScoreBreakdown`, `PipelineDiagnostics`, `AmbiguityReport`.
+2. **Detection models** — `AmbiguityCandidate`, the object the detectors
+   emit.
+3. **Semantic models** — `SenseOption`, `SenseRanking`, for the WordNet layer.
+4. **LLM contract and report models** — `Interpretation`, `LLMJudgement`,
+   `CandidateAdjudication`, `PipelineDiagnostics`, `SentenceSummary`,
+   `AdjudicationReport`.
 
-Groups 2, 3 and 4 are **defined but not yet produced by any code**. They are
-written now because the schema is the interface between layers: fixing it early
-means each subsequent phase has an explicit contract to implement against.
+Groups 2, 3 and 4 were **defined before any code produced them**. They were
+written first because the schema is the interface between layers: fixing it
+early gave each subsequent phase an explicit contract to implement against.
+All three groups are now produced by Phases 2-5. Phase 1 originally sketched
+`AmbiguityFinding`, `LLMAnalysis`, `ScoreBreakdown` and `AmbiguityReport`;
+those were replaced by the models above when the design moved to
+candidate-level adjudication and dropped the numeric score.
 
 The models include defensive validators that exist because language models
 return imperfect JSON in practice — a type string such as `"structural"`
@@ -457,7 +456,7 @@ else, which is a truthful answer rather than a guess.
 ### 10.2 Input validation — `src/ambisense/preprocessing/cleaner.py`
 
 This layer runs **before** any expensive work — before the spaCy model loads,
-before any planned WordNet lookup or API call — so that bad input fails
+before any WordNet lookup or API call — so that bad input fails
 immediately and cheaply, with a message the user can act on.
 
 It performs:
@@ -474,12 +473,12 @@ It performs:
   characters that are ASCII. Text in Devanagari, Cyrillic or CJK scripts scores
   near zero and is rejected with an explanatory message; English containing a
   few accented characters still passes. This is a deliberately crude heuristic,
-  not language identification — see [Known Limitations](#23-known-limitations).
+  not language identification — see [Known Limitations](#26-known-limitations).
 - **Optional context normalisation**, with its own length limit.
 
 Crucially, all offsets reported downstream refer to the *normalised* string,
 which is also the string shown back to the user. The two therefore cannot drift
-apart, which is what makes reliable span highlighting possible in the planned
+apart, which is what makes reliable span highlighting possible in the Streamlit
 interface.
 
 ### 10.3 Linguistic analysis — `src/ambisense/preprocessing/linguistic.py`
@@ -488,19 +487,19 @@ interface.
 
 spaCy provides tokenisation, sentence segmentation, POS tagging,
 lemmatisation, dependency parsing and named entity recognition from a single
-pipeline in one pass. The planned detectors need all of these, and obtaining
+pipeline in one pass. The detectors need all of these, and obtaining
 them from one tool avoids reconciling different tokenisations between
 libraries — a real source of bugs when, for example, a POS tagger and a parser
 disagree about token boundaries.
 
 The `en_core_web_md` model was chosen over `en_core_web_sm` because it ships
-300-dimensional word vectors. The planned semantic layer needs embeddings, and
+300-dimensional word vectors. The semantic layer needs embeddings, and
 taking them from the model that is already loaded avoids adding a second,
 much heavier dependency.
 
-#### What is extracted, and what will consume it
+#### What is extracted, and what consumes it
 
-| Technique | Planned consumer |
+| Technique | Consumer |
 |---|---|
 | Tokenisation | Every detector — span boundaries and character offsets |
 | Sentence segmentation | Referential detector — the antecedent search window |
@@ -528,7 +527,7 @@ so that the referential detector builds on an accurately described field.
 For "I saw the man with the telescope.", spaCy attaches the preposition *with*
 to *man*. It has silently committed to one of the two available readings and
 discarded the other. The parse itself therefore does not reveal the ambiguity;
-the planned detector's job is to recognise that an alternative attachment was
+the detector's job is to recognise that an alternative attachment was
 structurally available. This is the concrete reason the project needs a
 detection layer rather than just a parser.
 
@@ -602,8 +601,8 @@ It is computed deterministically from the rule that fired - for the lexical
 detector, from the sense and domain counts; for the referential detector, from
 how many antecedents survived filtering. It is used to rank candidates and to
 apply the per-sentence cap, and it is passed to the LLM as evidence. A real
-probability would require calibration against labelled data, which is Phase 7
-work and has not been done.
+probability would require calibration against labelled data, which has not
+been done: the Phase 7 set (Section 16) is far too small to calibrate anything.
 
 ### 11.5 The registry
 
@@ -990,8 +989,8 @@ Validation rules that refuse to guess:
 By default, all candidates of a sentence go in **one request**, and each is
 still validated independently. The alternative - one request per candidate -
 makes the local model re-process roughly 600 tokens of instructions for every
-candidate; with sentences already taking minutes on `qwen3:14b`, that
-multiplies the wait. The risk of batching is
+candidate; with sentences taking tens of seconds on the default 4B model (and
+minutes on the `qwen3:14b` explored earlier), that multiplies the wait. The risk of batching is
 that candidates' judgements influence one another; the prompt instructs
 independent judgement, and `adjudication.batch_candidates: false` switches to
 fully isolated requests using the same code path. Requests are also capped at
@@ -1041,11 +1040,10 @@ SHA-256 of the provider, model, settings and **full prompt text** - so editing
 a prompt automatically invalidates old answers. Only replies that pass
 validation are stored, so a transient bad reply cannot become permanent.
 
-On local hardware the cache is what makes a live demo practical: the first
-analysis of a sentence took minutes on `qwen3:14b`, and an identical re-run is
-answered from disk (both timings are shown under *LLM adjudication output* in
-[Section 17](#17-example-nlp-output)). Running the demo sentences once
-beforehand pre-fills it.
+On local hardware the response cache makes repeated analyses much faster.
+Fresh analyses with `qwen3:4b-instruct-2507-q4_K_M` typically take tens of
+seconds on the development machine, while an identical re-run is answered
+from disk. Running the demo sentences once beforehand pre-fills the cache.
 
 ### 13.13 Security and privacy
 
@@ -1080,13 +1078,13 @@ beforehand pre-fills it.
 ### 13.15 Local LLM setup and live run (opt-in)
 
 ```powershell
-# 1. Install Ollama from https://ollama.com, then pull the model (~9.3 GB):
-ollama pull qwen3:14b
+# 1. Install Ollama from https://ollama.com, then pull the model (~2.5 GB):
+ollama pull qwen3:4b-instruct-2507-q4_K_M
 
 # 2. Confirm the server is reachable and the model is installed:
 .\.venv\Scripts\python.exe main.py --check-config
 
-# 3. Run the seven evaluation cases (slow: minutes per sentence):
+# 3. Run the seven evaluation cases:
 .\.venv\Scripts\python.exe main.py --live-llm-test
 ```
 
@@ -1100,13 +1098,25 @@ analysis code.
 To try a different installed model for one run, set `LLM_MODEL` in `.env`
 (for example `LLM_MODEL=qwen2.5:latest`).
 
-### 13.16 Choosing the local model (measured)
+### 13.16 Choosing the local model
 
-The default model was chosen by running all seven cases, through the real
-pipeline with the cache disabled, on two installed models. **This is a manual
+**Default: `qwen3:4b-instruct-2507-q4_K_M`.** It was chosen after two larger
+models proved too slow for interactive use on the development machine, while it
+still produces usable candidate-level adjudication. Fresh end-to-end analyses
+of the tested examples took roughly **14-38 seconds** (a fresh Streamlit
+analysis took 24.5 s), and an identical repeat is answered from the response
+cache. These timings are hardware-dependent. Its accuracy is measured by the
+live evaluation in [Section 16.4](#164-results), not by anything in this
+section.
+
+#### Development measurements on the earlier models
+
+Before the switch, the seven demo cases were run through the real pipeline with
+the cache disabled on `qwen2.5:latest` (7B) and `qwen3:14b`. **This was a manual
 inspection of seven sentences, run once each, judged by the developer - not an
 evaluation.** No labelled dataset was used, the numbers describe this machine
-only, and they must not be read as accuracy figures.
+only, and they must not be read as accuracy figures. The 4B model was **not**
+put through this same table; its per-case behaviour is in 16.4.
 
 | | `qwen2.5:latest` (7B) | `qwen3:14b` (14B) |
 |---|---|---|
@@ -1135,38 +1145,218 @@ Verdict per candidate:
 | The crane lifted the heavy container. | lexical *crane* | genuine | not ambiguous |
 | | lexical *lifted* | genuine | not ambiguous |
 
-**Why `qwen3:14b` is the default.** The adjudicator exists to reject the rule
-layer's false positives. `qwen2.5` mostly did not: it accepted 11 of 13
-candidates and justified them with readings the prompt explicitly forbids as
-absurd, for example "The fisherman sat on *a container for keeping money at
-home*", "*A large long-necked wading bird* lifted a heavy container" and "The
-chicken is *a person* who is ready to eat something". Its "apples at the
-market" interpretations ("market location" versus "market stall") are not two
-attachment readings at all. In practice it passed detector output straight
-through, which would make the LLM layer a rubber stamp. `qwen3:14b` rejected
-the documented false positives, kept the two clear ambiguities with correct
-interpretations and rewrites, and - on the crane - chose the machine sense
-against Phase 3's confidently wrong bird ranking.
+**What this showed.** The adjudicator exists to reject the rule layer's false
+positives. `qwen2.5` mostly did not: it accepted 11 of 13 candidates and
+justified them with readings the prompt explicitly forbids as absurd, for
+example "The fisherman sat on *a container for keeping money at home*" and
+"*A large long-necked wading bird* lifted a heavy container". Passing detector
+output straight through would make the LLM layer a rubber stamp. `qwen3:14b`
+rejected the documented false positives and kept the two clear ambiguities
+with correct interpretations and rewrites - but it was about eight times
+slower, judged "ready to eat" not ambiguous (a false negative on the textbook
+example, with explanations that contradict each other across candidates), and
+on the crane its self-reported `semantic_evidence_agreement` was wrong (which is
+why agreement is now computed in code, Section 25.4).
 
-**What it costs, and what it got wrong.**
-
-- **It is about eight times slower**: minutes per sentence rather than seconds.
-  The response cache and pre-running demo sentences are the mitigation.
-- **It judged "ready to eat" not ambiguous**, which is a false negative on the
-  textbook example, and its explanations contradict each other: the *chicken*
-  candidate says the chicken will be eaten, while the *ready to eat* candidate
-  says the chicken will do the eating.
-- **Its `semantic_evidence_agreement` is unreliable.** On the crane it chose
-  the machine sense - disagreeing with Phase 3, which ranked the bird first -
-  yet reported `agrees`. The verdict was right; the self-reported agreement
-  was wrong.
-
-`qwen2.5` remains a practical fallback when speed matters more than filtering:
-set `LLM_MODEL=qwen2.5:latest` in `.env`.
+Speed is what moved the default to the 4B model. To try another installed
+model for one run, set `LLM_MODEL` in `.env`.
 
 ---
 
-## 14. Installation
+## 14. Phase 5 — Sentence-Level Verdict (Complete)
+
+Phase 4 judges candidates one by one. Phase 5 answers the question a user
+actually asks: *is this sentence ambiguous?*
+
+### 14.1 A verdict, not a score
+
+The original plan called for a weighted "ambiguity score". It was **not
+built**, on purpose. Every input such a score could combine is a quantity this
+README has already shown to be uncalibrated:
+
+| Input | Why it cannot be averaged into a score |
+|---|---|
+| Detector signal strength (`prior`) | A rule-derived strength, "not a probability" ([11.4](#114-what-signal-strength-means)) |
+| Phase 3 similarity | Cosine of averaged vectors, "not a probability" ([12.4](#124-similarity-is-not-probability)); confidently wrong on the crane |
+| LLM confidence | Self-reported; the *same* telescope verdict came back as 0.95, 0.70 and 0.80 in three runs ([13.10](#1310-confidence)) |
+
+A weighted sum of three uncalibrated numbers is a fourth uncalibrated number
+that merely *looks* precise. The report already carries the per-candidate
+evidence, so the sentence-level result is instead a **label derived by a fixed
+rule from verdicts that already exist**, plus plain counts. Every field can be
+recomputed by hand from the candidate list. The `scoring:` and `output:` blocks
+that earlier phases reserved in `config.yaml` were removed rather than left as
+configuration that nothing reads.
+
+### 14.2 The rule
+
+`pipeline/summary.py::build_sentence_summary` applies these checks in order:
+
+| # | Condition | `SentenceVerdict` |
+|---|---|---|
+| 1 | Any candidate has no judgement (LLM not configured, unreachable or invalid reply) | `incomplete` |
+| 2 | No candidates were found | `no_candidates` |
+| 3 | At least one candidate judged `genuine_ambiguity` | `ambiguous` |
+| 4 | At least one candidate judged `uncertain`, none genuine | `uncertain` |
+| 5 | Every candidate judged `not_ambiguous` | `not_ambiguous` |
+
+Two consequences are deliberate:
+
+- **`incomplete` outranks `ambiguous`.** If one candidate could not be judged,
+  the sentence is reported incomplete even when another candidate was confirmed
+  genuine. A failure is a fact about the run; it is not evidence that the
+  missing candidate was harmless. (The confirmed candidate is still listed.)
+- **`no_candidates` is not "unambiguous".** It means no detector fired. The
+  detectors have known blind spots ([Section 26](#26-known-limitations)), and
+  the verdict text says so.
+
+`SentenceSummary` also carries `total_candidates`, `genuine_count`,
+`not_ambiguous_count`, `uncertain_count`, `unresolved_count`,
+`genuine_candidate_ids` and a one-sentence `explanation`, all attached to
+`AdjudicationReport.summary`.
+
+### 14.3 Structure
+
+The orchestration that used to live in `main.py` is now a package, and the
+terminal rendering is separated from it:
+
+| File | Purpose |
+|---|---|
+| `pipeline/evidence.py` | `gather_evidence`: preprocessing, detection and sense ranking. Accepts an already-loaded spaCy analyzer so a long-lived process (Streamlit) does not reload the model per request |
+| `pipeline/runner.py` | `analyze`: evidence, then adjudication, then the summary |
+| `pipeline/summary.py` | `build_sentence_summary`: the rule above |
+| `cli/render.py` | Terminal rendering only; computes nothing |
+
+### 14.4 Limits of the rollup
+
+- It is exactly as good as the candidate verdicts. One false-positive
+  `genuine_ambiguity` from the LLM makes the whole sentence `ambiguous`; this
+  "at least one genuine candidate" rule is also how the Phase 7 labels are
+  defined, so the two are consistent, but it is a strict rule.
+- It does not weigh candidates: a low-confidence genuine verdict and a
+  high-confidence one count the same.
+
+---
+
+## 15. Phase 6 — Streamlit Interface (Complete)
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app/streamlit_app.py
+```
+
+`app/streamlit_app.py` is a thin presentation layer over the same
+`pipeline.analyze` the CLI uses; it computes nothing about ambiguity itself.
+
+| Element | Behaviour |
+|---|---|
+| Sidebar | Live Ollama status: ready, model not installed (with the `ollama pull` hint) or server unreachable (with the `ollama serve` hint) |
+| Demo selector | The seven sentences from `data/examples/adjudication_cases.json`, the same file `--live-llm-test` uses |
+| **Analyze** button | Disabled until the server and model are ready, so a missing model fails visibly rather than after a long wait |
+| Sentence verdict | Coloured banner plus the summary explanation (Section 14) |
+| Highlighted text | Only spans the LLM confirmed as **genuine** are highlighted, with the detector's reason as a tooltip |
+| Candidate panels | The three evidence layers kept apart - rule-based, semantic, LLM - with interpretations and rewrites, as in the CLI |
+| Footer | Provider, model, request count, cache hit, repair flag, and the "self-reported, not calibrated" note |
+
+Design points:
+
+- **Highlighting is limited to confirmed ambiguities**, not every detector
+  candidate. The detectors over-flag by design (Section 11.2); highlighting
+  their raw output would present false positives as findings.
+- **All user text and tooltip text is HTML-escaped** before it enters the
+  highlighted markup, and overlapping spans are skipped rather than emitting
+  broken HTML. Both are tested.
+- **Expensive setup is cached.** Streamlit re-runs the script on every
+  interaction; settings, the spaCy pipeline and the adjudicator are built once
+  per server process with `st.cache_resource`.
+- **Failures are shown, never hidden.** A candidate with no judgement displays
+  its status and error and is never rendered as "not ambiguous".
+
+**Verification and limits.** `tests/test_streamlit_app.py` renders the app
+headlessly with Streamlit's `AppTest` (server-ready and server-down states) and
+unit-tests the highlighter. The visual layout has not been reviewed in a
+browser as part of an automated check. The call is synchronous: with
+the default `qwen3:4b-instruct-2507-q4_K_M` the page shows a spinner for roughly
+15-40 seconds on an uncached sentence (minutes with `qwen3:14b`). There
+is no progress streaming, no user accounts, and no deployment - it is a local
+demo.
+
+---
+
+## 16. Phase 7 — Evaluation (Complete)
+
+### 16.1 The dataset
+
+`data/evaluation/sentence_labels.json` holds **23 sentences**: 13 written to be
+ambiguous (two or three per ambiguity type) and 10 ordinary controls. Each has
+a label and a note explaining it. It is deliberately separate from
+`data/examples/adjudication_cases.json`, which has no labels, and a test
+asserts that none of the 23 sentences is one of the seven demo sentences the
+prompts and this README were developed against.
+
+The label is sentence-level and binary: **does the sentence contain at least
+one genuine ambiguity?** Matching the system's *spans* and *types* against
+annotated spans would need a span-overlap and type-alignment method this
+project does not implement, so type-level accuracy is **not** measured.
+
+**Annotation caveats, stated plainly.**
+
+- **One annotator**, who is also the developer. There is no inter-annotator
+  agreement.
+- **The positives are textbook examples** written by someone who knew what the
+  detectors look for, and the controls are plain sentences. Both choices make
+  the task easier than real text, so the numbers below are optimistic about
+  real-world use.
+- **Some labels are arguable.** For example, `pragmatic_pass_salt` labels a
+  conventional indirect request as ambiguous, and `lexical_plant` has one
+  overwhelmingly common reading. A different annotator could reasonably
+  disagree, and those cases are where the LLM's answer is a judgement call.
+- **23 sentences is very small.** One sentence moves accuracy by 4.3 percentage
+  points.
+
+### 16.2 The metrics
+
+`evaluation/metrics.py` treats `ambiguous` as the positive class and reports
+accuracy, precision, recall, F1 and the confusion matrix, computed with
+scikit-learn. The design choice that matters is **abstention**:
+
+- A sentence verdict of `uncertain` or `incomplete` is an *abstention*, not a
+  guess. It is excluded from precision/recall/F1 and reported separately.
+- Two accuracies are always shown together: **accuracy over confident
+  predictions** and **pessimistic accuracy** (every abstention counted as
+  wrong, over all cases). The optimistic number is never printed without the
+  pessimistic one.
+- `no_candidates` counts as a confident `not_ambiguous` prediction - the system
+  looked and found nothing - which is the fair reading for a control sentence
+  and a false negative for a positive one.
+- With zero confident predictions the metrics are `None`, never 0.0.
+
+### 16.3 Running it
+
+```powershell
+.\.venv\Scripts\python.exe main.py --evaluate
+```
+
+This checks that the Ollama server and model are ready, runs all 23 sentences
+through the real pipeline and prints the metrics and a per-case table. It is
+opt-in and never runs under pytest. On `qwen3:14b` it takes on the order of an
+hour on this machine; the response cache makes a re-run of the same sentences
+and prompts instant.
+
+### 16.4 Results
+
+@@EVAL_RESULTS@@
+
+### 16.5 What is tested offline
+
+`tests/test_evaluation.py` checks the metric arithmetic on hand-built
+confusion matrices, the abstention rules, dataset validation (malformed JSON,
+unknown labels, duplicate ids, empty file), and `run_evaluation` end to end
+against a scripted provider. That verifies the *harness*. It says nothing about
+the model's accuracy; only the live run in 16.4 does.
+
+---
+
+## 17. Installation
 
 Tested on Windows 11 with Python 3.13.
 
@@ -1219,25 +1409,25 @@ Required — it is not installed by `requirements.txt`.
 
 ### 6. Download the WordNet corpus
 
-Not used by the current code, but `--check-config` reports on it and Phase 3
-will require it.
+Required by the lexical detector (Phase 2) and the semantic analysis layer
+(Phase 3); `--check-config` reports whether it is present.
 
 ```powershell
 .\.venv\Scripts\python.exe -c "import nltk; nltk.download('wordnet'); nltk.download('omw-1.4')"
 ```
 
-### 7. Install the local LLM (for `--analyze` only)
+### 7. Install the local LLM (for `--analyze`, `--evaluate` and the web app)
 
 Install [Ollama](https://ollama.com), then pull the default model (about
 9.3 GB):
 
 ```powershell
-ollama pull qwen3:14b
+ollama pull qwen3:4b-instruct-2507-q4_K_M
 ```
 
-No API key is needed. The LLM is required only for `--analyze` and
-`--live-llm-test`; every other mode, and the whole test suite, works without
-Ollama installed.
+No API key is needed. The LLM is required only for `--analyze`,
+`--live-llm-test`, `--evaluate` and the **Analyze** button of the web app; every
+other mode, and the whole test suite, works without Ollama installed.
 
 Optionally copy `.env.example` to `.env` to override settings such as
 `LLM_MODEL`. Every variable in it is optional. Never commit `.env`; it is
@@ -1252,7 +1442,7 @@ git-ignored.
 
 ---
 
-## 15. Current CLI Usage
+## 18. Current CLI Usage
 
 ```
 python main.py [text] [options]
@@ -1268,6 +1458,7 @@ python main.py [text] [options]
 | `--analyze-semantics` | Implemented | Rank each lexical candidate's WordNet senses against the context. No LLM call |
 | `--analyze` | Implemented | Full pipeline: candidates, semantic evidence, then LLM adjudication. Needs a running Ollama server |
 | `--live-llm-test` | Implemented | Opt-in: run `data/examples/adjudication_cases.json` on the local model. Slow; never run by pytest |
+| `--evaluate` | Implemented | Opt-in: run the 23 labelled sentences in `data/evaluation/sentence_labels.json` and print accuracy, precision, recall, F1 and abstentions. Slow; never run by pytest |
 | `--check-config` | Implemented | Validate configuration and environment, then exit |
 | `--config PATH` | Implemented | Use an alternative `config.yaml` |
 | `--log-level LEVEL` | Implemented | Override the configured logging level |
@@ -1281,7 +1472,7 @@ Exit codes: `0` success, `1` user/input error, `2` configuration or setup error,
 
 ---
 
-## 16. Example Commands
+## 19. Example Commands
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --check-config
@@ -1308,12 +1499,16 @@ Exit codes: `0` success, `1` user/input error, `2` configuration or setup error,
 
 .\.venv\Scripts\python.exe main.py --live-llm-test
 
+.\.venv\Scripts\python.exe main.py --evaluate
+
+.\.venv\Scripts\python.exe -m streamlit run app/streamlit_app.py
+
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ---
 
-## 17. Example NLP Output
+## 20. Example NLP Output
 
 Actual output of:
 
@@ -1351,12 +1546,12 @@ I saw the man with the telescope.
 ```
 
 Note token 4: `with` has `HEAD = man`. The parser chose the noun-attachment
-reading and did not surface the verb-attachment alternative. No ambiguity is
-reported here, because **ambiguity detection is not implemented yet** — this
-command shows linguistic description only.
+reading and did not surface the verb-attachment alternative. This command shows
+linguistic description only; recognising that the other attachment was
+available is the job of the detection layer (Phase 2).
 
-A second example, showing the person heuristic that the planned referential
-detector will rely on, from:
+A second example, showing the person heuristic that the referential
+detector relies on, from:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --dump-nlp "The manager told the developer that he needed to fix the bug."
@@ -1546,13 +1741,14 @@ Supplying a separate context passage with `-c` widens the context words used:
 
 An honest result: the two senses are effectively tied (margin 0.0028), the
 machine sense is marginally ahead, and the system correctly declines to call
-it resolved. See [Known Limitations](#23-known-limitations).
+it resolved. See [Known Limitations](#26-known-limitations).
 
 ---
 
 ### LLM adjudication output
 
-Actual output of the shipped command, with `qwen3:14b` running locally:
+Actual output of the shipped command, with `qwen3:14b` running locally (this
+particular run was answered from the response cache, hence `requests: 0`):
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --analyze "I saw the man with the telescope."
@@ -1568,6 +1764,9 @@ Input:
 
 Candidates adjudicated: 1
 
+Sentence verdict: AMBIGUOUS
+  1 of 1 candidate(s) confirmed as genuine ambiguities.
+
 ----------------------------------------------------------------------
 [c1] SYNTACTIC   span: 'with the telescope'
 
@@ -1581,27 +1780,23 @@ Candidates adjudicated: 1
 
   3. LLM judgement (Phase 4):
      verdict: GENUINE_AMBIGUITY
-     confidence: 0.70 (self-reported)
-     agrees with semantic evidence: not_applicable
+     confidence: 0.80 (self-reported)
      explanation:
-       The phrase 'with the telescope' can plausibly modify either the
-       verb 'saw' (indicating the means of seeing) or the noun 'man'
-       (indicating possession). Neither reading is definitively supported
-       by the sentence alone.
+       Both readings are structurally valid and plausible in normal usage
+       without additional context to disambiguate.
      interpretations:
-       1. The man had a telescope.
+       1. The man had a telescope
           (The prepositional phrase 'with the telescope' modifies 'man',
-          indicating possession.)
-       2. I used a telescope to see the man.
+          describing him as the possessor of the telescope.)
+       2. I used a telescope to see the man
           (The prepositional phrase 'with the telescope' modifies 'saw',
-          indicating the means of seeing.)
+          indicating the means by which the seeing occurred.)
      suggested rewrites:
        1. I saw the man who had a telescope.
        2. I saw the man using a telescope.
 
 ======================================================================
-LLM: ollama qwen3:14b | requests: 2 | cache hit: False | repair: False
-Tokens (provider-reported): prompt 1227, completion 1835
+LLM: ollama qwen3:14b | requests: 0 | cache hit: True | repair: False
 Genuine ambiguities confirmed: 1 of 1 candidates
 
 Note: LLM confidence is self-reported by the model and is NOT a
@@ -1610,30 +1805,32 @@ shown above and can be wrong.
 ======================================================================
 ```
 
-This run took **479 s** on this machine and exited with status `0`.
-An identical second run took **6 s**, answered from the response
-cache (`cache hit: True`, no model call).
+The "Sentence verdict" lines are the Phase 5 rollup
+([Section 14](#14-phase-5--sentence-level-verdict-complete)); the panels below
+them are the per-candidate evidence it was computed from.
 
-Compare this with the same sentence in the measurement run (13.16): there it
-took 200 s and reported confidence **0.95**; here it took 479 s and
-reported **0.70**. The verdict, both interpretations and both rewrites were
-identical. The difference came from the model reasoning for longer (1,835
-completion tokens here against 808), and it shows two things directly: local
-timings vary a lot between runs, and self-reported confidence is not stable
-even at temperature 0.
+The same sentence has now been through the model three times. The first, fresh
+run in the 13.16 measurement took 200 s and reported confidence **0.95**; a
+later fresh run took **479 s** (the model reasoned for longer: 1,835 completion
+tokens against 808) and reported **0.70**; the cached run shown above carries
+**0.80**. The verdict and the two readings were the same each time. It shows
+two things directly: local timings vary a lot between runs, and self-reported
+confidence is not stable even at temperature 0. An identical repeat of an
+uncached run took 6 s from the cache.
 
-Two requests were made: one adjudication and, because the candidate was judged
-genuine, one rewrite request. For a rejected candidate the rewrite request is
-never sent - see the crane example in 13.16, where both candidates were judged
-not ambiguous and the run made a single request.
+On a fresh run two requests are made: one adjudication and, because the
+candidate was judged genuine, one rewrite request. For a rejected candidate the
+rewrite request is never sent - see the crane example in 13.16, where both
+candidates were judged not ambiguous and the run made a single request.
 
 If Ollama is not running, the same command still prints the rule-based and
 semantic evidence, marks the candidate `LLM_UNAVAILABLE` with the hint
-`Start it with: ollama serve`, and exits with status `3`.
+`Start it with: ollama serve`, reports the sentence verdict as `INCOMPLETE`,
+and exits with status `3`.
 
 ---
 
-## 18. Configuration
+## 21. Configuration
 
 All configuration lives in `config/config.yaml`. The sections are:
 
@@ -1645,22 +1842,22 @@ All configuration lives in `config/config.yaml`. The sections are:
 | `embeddings` | Read and validated; not used | Backend selection field; Phase 3 uses the spaCy backend directly |
 | `detectors` | **In use** | Per-detector on/off switches and their thresholds |
 | `semantic_analysis` | **In use** | Sense-ranking parameters: gloss representation, context construction, thresholds |
-| `scoring` | Read and validated; not used | Score weights and thresholds |
-| `output` | Read and validated; not used | Degraded-mode and evidence-inclusion switches |
 | `logging` | **In use** | Level and format |
 
-Sections marked "read and validated; not used" are loaded into typed objects
-and checked for consistency at startup, but no current code path consumes them.
-They are present so that each planned phase has its configuration already in
-place.
+`embeddings` is loaded and validated at startup (an unimplemented backend is
+rejected), but no code path reads its value yet. There is no `scoring` or
+`output` section: the numeric score they were reserved for was not built
+([Section 14](#14-phase-5--sentence-level-verdict-complete)).
 
 The LLM runs **locally through Ollama**, which is the only implemented
 provider; `config.yaml` is validated at startup so any other provider name
-fails immediately rather than mid-analysis. The default model is `qwen3:14b`,
-chosen by measurement (Section 13.16). Its `timeout_seconds: 600` and
-`max_tokens: 4000` are also set from measured values: the slowest sentence took
-287 s, and qwen3's reasoning used up to 1,043 completion tokens for a
-three-candidate batch.
+fails immediately rather than mid-analysis. The default model is
+`qwen3:4b-instruct-2507-q4_K_M`, chosen for its practical local speed
+(Section 13.16); `LLM_MODEL` overrides it for one run. `timeout_seconds: 600`
+and `max_tokens: 4000` were set from measurements on the earlier `qwen3:14b`
+(slowest sentence 287 s; up to 1,043 completion tokens for a three-candidate
+batch) and are deliberately generous for the faster 4B model, so they leave
+headroom rather than being tight limits.
 
 Transport settings (`llm:`) and prompt settings (`adjudication:`) are
 deliberately separate blocks: how to reach the model is a different concern
@@ -1668,7 +1865,7 @@ from what the model is asked.
 
 ---
 
-## 19. Environment Variables
+## 22. Environment Variables
 
 **No environment variable is required.** The defaults in `config.yaml` work
 with a local Ollama server. To override something, copy `.env.example` to
@@ -1687,16 +1884,16 @@ demonstration without editing the YAML file.
 
 ---
 
-## 20. Testing
+## 23. Testing
 
-The current implementation has **363 automated tests**, all passing.
+The current implementation has **396 automated tests**, all passing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ```text
-363 passed
+396 passed
 ```
 
 **Scope of these tests.** They cover every implemented layer:
@@ -1742,8 +1939,25 @@ The current implementation has **363 automated tests**, all passing.
   not appear in any LLM code or prompt; and integration with the real
   Phase 1-3 pipeline.
 
-They do **not** test scoring, the interface or evaluation, because none of
-those exist yet.
+- `tests/test_pipeline_summary.py` - each branch of the sentence-verdict
+  rule and its precedence (Section 14.2), on hand-built adjudications.
+- `tests/test_pipeline_runner.py` - `analyze` attaches a summary consistent
+  with its own candidate list, against a scripted provider and real Phase 1-3
+  evidence; the no-candidates path makes no LLM request.
+- `tests/test_pipeline_evidence.py` - an injected spaCy analyzer is reused, not
+  rebuilt.
+- `tests/test_cli_dispatch.py` - every text-less CLI flag reaches its handler;
+  `--evaluate` refuses cleanly when the server is down.
+- `tests/test_evaluation.py` - metric arithmetic, abstention handling, dataset
+  validation, and `run_evaluation` end to end against a scripted provider.
+- `tests/test_streamlit_app.py` - the highlighter (only genuine spans, HTML
+  escaping, overlaps) and a headless render of the app in server-ready and
+  server-down states.
+
+**What the tests do not cover.** They verify code paths, not the model's
+accuracy: whether the configured model judges a sentence correctly is measured only by
+the opt-in live runs (13.16 and 16.4). The web app's visual layout is not
+checked in a real browser.
 
 **No test makes an API call, and none can.** Phase 4 tests use fake providers
 or `httpx.MockTransport`. In addition, `tests/conftest.py` patches httpx's real
@@ -1752,7 +1966,7 @@ request - including to an Ollama server that happens to be running - it fails
 immediately, so the suite is fast and gives the same result on every machine.
 Live checks exist only as the opt-in `--live-llm-test` command.
 
-Two issues were found by these tests during development:
+Three issues were found during development:
 
 1. A confidence value of `1.4` returned by a model was being interpreted as
    "1.4 percent" and collapsed to `0.014`, turning a confident answer into a
@@ -1766,26 +1980,36 @@ Two issues were found by these tests during development:
    positive still occurs* and explains why. If a future change makes the
    syntactic rule narrower, that test will fail and prompt a check that the
    telescope sentence still fires.
+3. **`--evaluate` was parsed by the CLI but never dispatched**: the first
+   real attempt to run the Phase 7 evaluation printed "No text supplied"
+   instead of running. The unit tests had all passed, because none exercised
+   the command line. `tests/test_cli_dispatch.py` now pins every flag to its
+   handler. A related weakness was also removed: a runner test for the
+   no-candidates path had been skipping itself on every run, because the
+   sentence it used does trigger detectors; it now uses one that does not.
 
 ---
 
-## 21. Project Structure
+## 24. Project Structure
 
-This is the **actual** current contents of the repository. Empty directories
-and placeholder `__init__.py` files are marked as such.
+This is the current contents of the repository (generated caches and the
+virtual environment omitted).
 
 ```
 NLP based ambiguity detector/
 │
-├── main.py                              # CLI entry point
+├── main.py                              # CLI entry point and command dispatch
 ├── pyproject.toml                       # Package definition
 ├── requirements.txt                     # Dependencies
 ├── README.md                            # This file
-├── .env.example                         # Secret template
+├── .env.example                         # Optional-overrides template
 ├── .gitignore
 │
 ├── config/
 │   └── config.yaml                      # All configuration
+│
+├── app/
+│   └── streamlit_app.py                 # Phase 6 - web interface
 │
 ├── src/
 │   └── ambisense/
@@ -1795,12 +2019,10 @@ NLP based ambiguity detector/
 │       ├── schemas.py                   # All Pydantic models
 │       │
 │       ├── preprocessing/
-│       │   ├── __init__.py
 │       │   ├── cleaner.py               # Validation and normalisation
 │       │   └── linguistic.py            # spaCy analysis layer
 │       │
 │       ├── ambiguity/                   # Phase 2 - rule-based detection
-│       │   ├── __init__.py
 │       │   ├── base.py                  # Detector ABC + span/tree helpers
 │       │   ├── registry.py              # Config-driven registry + dedup
 │       │   ├── wordnet_support.py       # WordNet sense/domain counting
@@ -1810,33 +2032,41 @@ NLP based ambiguity detector/
 │       │   ├── semantic.py
 │       │   ├── scope.py
 │       │   └── pragmatic.py
+│       │
 │       ├── semantic/                    # Phase 3 - semantic analysis
-│       │   ├── __init__.py
 │       │   ├── wordnet_senses.py        # Sense retrieval with glosses
 │       │   ├── embeddings.py            # Vector backend + cosine similarity
 │       │   └── context_resolver.py      # SemanticAnalyzer
+│       │
 │       ├── llm/                         # Phase 4 - LLM adjudication
-│       │   ├── __init__.py
 │       │   ├── adjudicator.py           # Orchestration: batches, repair, rewrites
 │       │   ├── evidence.py              # Compact evidence package
 │       │   ├── prompt_builder.py        # Loads and fills prompts/*.txt
 │       │   ├── parser.py                # JSON extraction + per-candidate validation
+│       │   ├── agreement.py             # Agreement with Phase 3, computed in code
 │       │   ├── client.py                # Bounded retry policy
 │       │   ├── errors.py                # Typed errors, retry/status mapping, redaction
 │       │   ├── cache.py                 # Validated-response disk cache
 │       │   ├── factory.py               # Provider registry
 │       │   ├── health.py                # Ollama server / model check
 │       │   └── providers/
-│       │       ├── __init__.py
 │       │       ├── base.py              # LLMProvider protocol
 │       │       └── openai_compatible.py # Ollama provider (httpx)
-│       ├── scoring/
-│       │   └── __init__.py              # (placeholder - Phase 5)
-│       └── evaluation/
-│           └── __init__.py              # (placeholder - Phase 7)
+│       │
+│       ├── pipeline/                    # Phase 5 - orchestration
+│       │   ├── evidence.py              # gather_evidence (Phases 1-3)
+│       │   ├── runner.py                # analyze: evidence -> LLM -> summary
+│       │   └── summary.py               # Sentence-level verdict rule
+│       │
+│       ├── cli/
+│       │   └── render.py                # Terminal rendering (no logic)
+│       │
+│       └── evaluation/                  # Phase 7
+│           ├── dataset.py               # Labelled-dataset loader/validator
+│           ├── metrics.py               # Accuracy/P/R/F1 with abstention
+│           └── runner.py                # Runs the dataset through analyze()
 │
-├── tests/
-│   ├── __init__.py
+├── tests/                               # 396 tests in total
 │   ├── conftest.py                      # Blocks real network access
 │   ├── test_schemas.py
 │   ├── test_config.py
@@ -1844,44 +2074,32 @@ NLP based ambiguity detector/
 │   ├── test_detectors.py
 │   ├── test_semantic.py
 │   ├── test_llm_components.py
-│   └── test_llm_adjudicator.py          # 363 tests in total
+│   ├── test_llm_adjudicator.py
+│   ├── test_pipeline_evidence.py
+│   ├── test_pipeline_runner.py
+│   ├── test_pipeline_summary.py
+│   ├── test_cli_dispatch.py
+│   ├── test_evaluation.py
+│   └── test_streamlit_app.py
 │
 ├── prompts/
 │   ├── ambiguity_analysis.txt           # Adjudication prompt
 │   ├── rewrite_generation.txt           # Rewrite prompt (genuine only)
 │   └── json_repair.txt                  # One-shot repair message
 │
-├── app/                                 # (empty - Phase 6)
-├── docs/                                # (empty - Phase 8)
 └── data/
     ├── examples/
-    │   └── adjudication_cases.json      # 7 manual evaluation cases
-    └── evaluation/                      # (empty - Phase 7)
-```
-
-### Planned structure
-
-Files expected to be added in later phases:
-
-```
-src/ambisense/
-├── pipeline.py                          # Phase 5 - orchestrator
-├── scoring/
-│   └── ambiguity_score.py               # Phase 5
-└── evaluation/
-    ├── metrics.py                       # Phase 7
-    └── run_detection_eval.py            # Phase 7
-
-app/streamlit_app.py                     # Phase 6
-data/examples/demo_sentences.json        # Phase 6
-data/evaluation/gold_set.jsonl           # Phase 7
+    │   └── adjudication_cases.json      # 7 demo cases (no labels)
+    ├── evaluation/
+    │   └── sentence_labels.json         # 23 labelled sentences (Phase 7)
+    └── cache/                           # LLM response cache (git-ignored)
 ```
 
 ---
 
-## 22. Design Decisions
+## 25. Design Decisions
 
-### 19.1 spaCy `Doc` objects do not leave the preprocessing layer
+### 25.1 spaCy `Doc` objects do not leave the preprocessing layer
 
 `LinguisticAnalyzer.analyze()` converts spaCy's `Doc` into plain Pydantic
 models (`TokenInfo`, `EntityInfo`, `NounChunkInfo`, `SentenceInfo`, assembled
@@ -1893,11 +2111,11 @@ This is a small amount of extra code that buys five things:
 1. **Separation of concerns.** The preprocessing layer owns the dependency on
    spaCy. Nothing downstream imports spaCy or knows the version in use.
 2. **Serialisability.** A `Doc` cannot be converted to JSON directly. A
-   `LinguisticAnalysis` can, via `.model_dump_json()`. The planned LLM prompt
+   `LinguisticAnalysis` can, via `.model_dump_json()`. The LLM prompt
    builder needs exactly that: linguistic evidence embedded as text in a
    prompt. Passing plain models makes that a one-line operation instead of a
    bespoke extraction routine.
-3. **Easier testing.** The planned detectors can be tested by constructing
+3. **Easier testing.** The detectors can be tested by constructing
    small `LinguisticAnalysis` fixtures by hand. Those tests need no spaCy
    model, run in milliseconds, and are not affected by model version changes.
 4. **Detector independence.** Detectors depend on a schema this project
@@ -1911,31 +2129,53 @@ This is a small amount of extra code that buys five things:
 The cost is one conversion pass per analysis, which is negligible relative to
 the parse itself.
 
-### 19.2 Configuration validation checks semantic constraints, not just structure
+### 25.2 Configuration validation checks semantic constraints, not just structure
 
 Loading YAML into Pydantic already catches structural problems: a missing
 field, a string where a number was expected. `_validate_consistency()` in
-`config.py` adds three checks that YAML parsing and type validation cannot
-catch, because each involves a relationship *between* values:
+`config.py` adds checks that type validation cannot make, because each involves
+a relationship *between* values or a fact about what the code implements:
 
-1. The four `scoring.weights` must sum to `1.0` within a small tolerance.
-   Individually each is a perfectly valid float; only together are they wrong.
-   Weights summing to, say, `1.3` would silently distort every ambiguity score
-   the system ever produces.
-2. `embeddings.backend` must be one of the two backends the project actually
-   implements, so an unrecognised value fails at startup rather than when the
-   semantic layer is first invoked.
-3. `nlp.max_input_length` must not be below `nlp.min_input_length`, a
+1. `embeddings.backend` and `llm.provider` must name something the project
+   actually implements (currently the `spacy` backend and the `ollama`
+   provider), so an unrecognised value fails at startup rather than when the
+   layer is first invoked.
+2. `nlp.max_input_length` must not be below `nlp.min_input_length`, a
    combination that would reject all input.
+3. Numeric ranges that only make sense together with their meaning:
+   `llm.temperature` in [0, 2], `llm.max_retries` in [0, 5] (retries are
+   deliberately bounded), and the semantic thresholds within the range a cosine
+   similarity can take.
+4. Every prompt file named in `adjudication:` must exist, so a typo surfaces at
+   `--check-config` rather than on the first request.
 
 The benefit is that these mistakes surface immediately when `--check-config`
 runs, rather than partway through a demonstration. This is a modest
-consistency check on a handful of fields — not a general-purpose configuration
+consistency check on a handful of fields - not a general-purpose configuration
 verification system.
+
+### 25.3 No numeric ambiguity score
+
+Recorded as a decision because it reverses the original plan. A weighted score
+would combine three quantities the README itself documents as uncalibrated, and
+would present an invented number with false precision. The sentence-level
+result is instead a fixed-precedence label with counts that can be checked by
+hand. See [Section 14](#14-phase-5--sentence-level-verdict-complete).
+
+### 25.4 Agreement with Phase 3 is computed, not asked for
+
+An earlier version asked the LLM whether it agreed with the Phase 3 sense
+ranking. On the crane sentence it chose the machine sense - overruling Phase 3's
+bird ranking, correctly - and then reported that it agreed (see 13.16). The
+model's verdict was right; its description of its own relationship to the
+evidence was wrong. That relationship is a fact the application can compute, so
+it now does: the model names the WordNet sense key it selected, and
+`llm/agreement.py` compares that key with Phase 3's rank-1 key, returning
+"cannot compare" rather than guessing when either side is missing.
 
 ---
 
-## 23. Known Limitations
+## 26. Known Limitations
 
 ### Limitations of the current implementation
 
@@ -1975,8 +2215,13 @@ verification system.
   one or two clear rules, not the full range of its ambiguity type. Garden-path
   sentences, ellipsis and many scope configurations are not covered.
 - **Rules are tuned on a small set of textbook examples**, not on a corpus.
-  Whether the thresholds generalise is an open question that Phase 7 exists to
-  answer.
+  Whether the thresholds generalise is an open question. The Phase 7 set is
+  itself textbook-style (Section 16.1), so it does not answer it.
+- **The lexical detector fires on ordinary sentences.** Measured directly:
+  "The soldiers marched across the bridge at dawn." yields two lexical
+  candidates and "He read the newspaper while waiting for the bus." yields
+  three, while "The sky is blue." yields none. Most plain sentences therefore
+  reach the LLM with at least one candidate, and rely on it to reject them.
 
 #### Semantic analysis (Phase 3)
 
@@ -2011,8 +2256,9 @@ verification system.
   method to explain.
 - **No labelled dataset has been used to calibrate the scores.** The
   similarity threshold and the resolution margin were chosen by inspecting a
-  handful of sentences. They are not fitted values, and no accuracy figure is
-  claimed anywhere in this document. Measuring this is Phase 7's purpose.
+  handful of sentences. They are not fitted values. The Phase 7 evaluation
+  scores the whole pipeline end to end; it was not used to tune these
+  thresholds and does not isolate the accuracy of this layer.
 - **The layer can be confidently wrong.** For "The crane lifted the heavy
   container.", the wrong sense wins by a margin large enough that the system
   reports `resolved_by_context = true`. A large margin means the top sense is
@@ -2034,36 +2280,31 @@ verification system.
   decision under version control, not a neutral measuring instrument; a test
   guards that its critical rules remain present, but not that its wording is
   optimal.
-- **The choice of model changes the results completely.** On the same seven
-  sentences and the same prompt, `qwen2.5` judged 11 of 13 candidates genuine
-  and `qwen3:14b` judged 2 of 13 (Section 13.16). The verdicts are a property of
-  the model as much as of the sentence. Updating or replacing the model can
-  change every result; the response cache makes re-runs repeatable, not
-  reproducible across model versions.
+- **The choice of model changes the results.** Different local LLMs can produce
+  different candidate-level judgements for the same evidence. The response
+  cache makes repeated requests reproducible for a fixed configuration, but
+  changing the model can change the results.
 - **Responses are not deterministic, even at temperature 0.0.** Observed
   directly: the telescope sentence reported confidence 0.95 in one run and 0.70
   in another, with the same verdict, interpretations and rewrites.
-- **Local inference is slow and hardware-dependent.** `qwen3:14b` took 108-287 s
-  per sentence in the measurement run (a 9.3 GB model), and one later run of a
-  single sentence took 479 s because the model reasoned for longer. Each analysed sentence makes up to two
-  requests (adjudication, then rewrites for genuine candidates), plus at most
-  one retry and one repair. Slower hardware may hit the 600 s timeout, and a
-  machine without enough memory cannot run the model at all. Cached sentences
-  are instant.
-- **The adjudicator makes real mistakes, observed directly.** `qwen3:14b` judged
-  "The chicken is ready to eat." not ambiguous - a false negative on the
-  textbook example - with explanations that contradict each other across
-  candidates.
+- **Local inference is hardware-dependent.** The final `qwen3:4b-instruct-2507-q4_K_M`
+  configuration took approximately 14–38 seconds for the tested end-to-end
+  examples on the development machine. Larger models can require substantially
+  longer inference times. Cached identical requests are much faster.
+- **The adjudicator makes real mistakes, observed directly.** In development
+  `qwen3:14b` judged "The chicken is ready to eat." not ambiguous - a false
+  negative on the textbook example - with explanations that contradict each
+  other across candidates. The 4B model used now has its own error profile;
+  see the per-case table in 16.4.
 - **The rule-based layer's false positives reach the LLM.** In the manual
   inspection `qwen3:14b` rejected the documented ones, but seven sentences are
-  not evidence that it does so reliably.
+  not evidence that any model does so reliably.
 - **Phase 3's errors reach the LLM too.** A confidently wrong sense ranking is
-  sent as evidence, and the model may be swayed by it. The
-  `semantic_evidence_agreement` field was meant to make disagreement visible,
-  but it is **self-reported and was observed to be wrong**: on the crane,
-  `qwen3:14b` overruled Phase 3's bird ranking yet reported `agrees`.
-- **No labelled ambiguity dataset has been used for evaluation.** No accuracy,
-  precision or recall figure exists for the adjudicator, and none is claimed.
+  sent as evidence, and the model may be swayed by it. Disagreement is now made
+  visible reliably: an earlier, self-reported agreement field was observed to
+  be wrong on the crane, so agreement is computed in code by comparing the
+  sense the model selected with Phase 3's top sense (Section 25.4). That fixes
+  the reporting, not the underlying risk of being swayed.
 - **Batched candidates may influence one another.** By default all candidates
   of a sentence share one request. The prompt instructs independent judgement,
   but that cannot be guaranteed; `batch_candidates: false` isolates them at
@@ -2073,10 +2314,33 @@ verification system.
   but a sufficiently adversarial input could still influence a verdict.
 - **One provider only.** Local Ollama is the only implemented provider.
 
+#### Sentence verdict, interface and evaluation (Phases 5-7)
+
+- **The sentence verdict inherits every candidate-level error.** One
+  false-positive `genuine_ambiguity` makes the sentence `ambiguous`, and a
+  sentence no detector flags is reported `no_candidates`, which is not proof
+  of clarity. Candidates are not weighted against each other.
+- **There is no numeric score.** Users cannot rank sentences by "how
+  ambiguous" they are; the system gives a category and the evidence. This is a
+  deliberate omission (Section 14.1), but it limits what the output can be
+  used for.
+- **The evaluation is small, single-annotator and easy.** 23 sentences, one
+  annotator who is also the developer, textbook positives and plain controls
+  (Section 16.1). Its numbers are a sanity check, not a benchmark, and one
+  sentence is worth 4.3 percentage points.
+- **Type-level accuracy is not measured.** The evaluation asks only whether a
+  sentence contains an ambiguity, not whether the system named the right type
+  or span.
+- **Only one model was evaluated end to end for the headline result.**
+  Other models can give very different verdicts (13.16); the numbers in 16.4
+  belong to the model named there.
+- **The interface is a local, synchronous demo.** No progress streaming, no
+  authentication, no deployment, and it has not been reviewed in a browser as
+  part of an automated check.
+
 ### Limitations expected to persist in the finished system
 
-These are inherent to the problem and will be restated, with evidence, once
-evaluation has actually been run:
+These are inherent to the problem:
 
 - **English only.** No multilingual support is planned for this submission.
 - **Sarcasm, irony and humour** depend on speaker intent and shared knowledge
@@ -2092,16 +2356,11 @@ evaluation has actually been run:
   confident explanation of an ambiguity that does not exist. This is the
   specific failure the hybrid architecture is designed to mitigate — mitigate,
   not eliminate.
-- **The planned (Phase 5) ambiguity score is project-specific.** It will be a weighted
-  combination defined by this project, not a recognised linguistic measurement,
-  and it will be documented as such.
-
-**No performance claims are made in this document.** No evaluation has been
-run, and no metrics exist yet.
+@@CLAIMS@@
 
 ---
 
-## 24. Planned Development Phases
+## 27. Development Phases
 
 | Phase | Name | Status |
 |---|---|---|
@@ -2110,21 +2369,19 @@ run, and no metrics exist yet.
 | 2 | Rule-based ambiguity detection — six detectors plus registry | **Complete** |
 | 3 | Semantic analysis — WordNet senses, embeddings, context-based sense ranking | **Complete** |
 | 4 | LLM adjudication — prompt files, provider interface, structured output validation, repair, rewrites | **Complete** |
-| 5 | Context-aware reasoning and ambiguity scoring — pipeline orchestrator, transparent score, degraded mode | **Next** |
-| 6 | User interface — Streamlit application with span highlighting and demo examples | Planned |
-| 7 | Evaluation — labelled dataset, accuracy/precision/recall/F1, manual review of explanations and rewrites | Planned |
-| 8 | Documentation, testing and final polish | Planned |
+| 5 | Pipeline orchestration and sentence-level verdict — count-based rollup; the numeric score was deliberately not built (Section 14.1) | **Complete** |
+| 6 | User interface — Streamlit application with span highlighting and demo examples | **Complete** |
+| 7 | Evaluation — labelled dataset, accuracy/precision/recall/F1 with abstention handling, live run | **Complete** |
+| 8 | Documentation, testing and final polish | **Complete** (this README, the test suite, the bug fixes recorded in Section 23) |
 
-Phase 5 is the next piece of work. It will aggregate the candidate-level
-judgements from Phase 4 into one sentence-level report with a transparent,
-explainable ambiguity score, and wire the degraded-mode switch. The observed
-weaknesses of the adjudicator (Section 13.16) - especially the unreliable
-self-reported agreement field - should inform how much weight the score gives
-to LLM output.
+Phases 5-7 differ from the original plan in two ways. Phase 5 replaced the
+"transparent ambiguity score" with a verdict (Section 14.1), and the
+"manual review of explanations and rewrites" planned for Phase 7 was done only
+for the seven demo sentences in 13.16, not for the 23 evaluation sentences.
 
 ---
 
-## 25. Technology Stack
+## 28. Technology Stack
 
 ### Currently used
 
@@ -2139,15 +2396,10 @@ to LLM output.
 | NLTK (WordNet) | 3.10.x | Sense counts and domain spread (Phase 2); sense glosses and examples (Phase 3) |
 | NumPy | 2.x | Mean word vectors and cosine similarity |
 | httpx | 0.28.x | HTTP transport to the LLM API (no vendor SDK); `MockTransport` for offline tests |
-| Ollama | 0.34.x, model `qwen3:14b` | Local LLM server for adjudication and rewrite generation |
+| Ollama | 0.34.x, model `qwen3:4b-instruct-2507-q4_K_M` | Local LLM server for ambiguity adjudication |
+| Streamlit | 1.64.x | Web interface (Phase 6); its `AppTest` runner also drives the headless UI tests |
+| scikit-learn | 1.9.x | Precision, recall, F1 and the confusion matrix (Phase 7) |
 | pytest | 9.x | Test framework |
-
-### Installed, reserved for later phases
-
-| Technology | Intended role | Phase |
-|---|---|---|
-| scikit-learn | Evaluation metrics | 7 |
-| Streamlit | User interface | 6 |
 
 ### Deliberately excluded
 
@@ -2156,7 +2408,7 @@ to LLM output.
   The provider is ~40 lines of plain `httpx`, so the actual HTTP request is
   visible and testable.
 - **`transformers` / `torch`** — a large dependency. The `en_core_web_md`
-  vectors are sufficient for the planned gloss-similarity comparison. The
+  vectors are sufficient for the gloss-similarity comparison. The
   configuration leaves a `sentence_transformers` backend selectable if this
   proves inadequate.
 - **Constituency parsers and neural coreference libraries** — added
@@ -2165,10 +2417,10 @@ to LLM output.
 
 ---
 
-## 26. Future Work
+## 29. Future Work
 
-Beyond the eight planned phases, the following would be reasonable extensions
-and are **not** part of this submission:
+Beyond the eight phases, the following would be reasonable extensions and are
+**not** part of this submission:
 
 - Paragraph-level and cross-sentence ambiguity, including referential chains
   spanning several sentences.
@@ -2179,14 +2431,18 @@ and are **not** part of this submission:
 - Support for languages other than English.
 - Domain adaptation — for example a mode tuned for software requirements, where
   the cost of an undetected ambiguity is high.
-- Inter-annotator agreement on the evaluation dataset. The planned dataset will
-  be labelled by a single annotator, which is a genuine methodological
-  limitation.
-- Response caching and batch processing of documents.
+- Inter-annotator agreement on the evaluation dataset. It is labelled by a
+  single annotator, which is a genuine methodological limitation, and a larger,
+  independently labelled set would be the first improvement to the evidence.
+- Span- and type-level evaluation, to measure whether the system names the
+  right ambiguity and not just whether it finds one.
+- Calibrating the LLM's self-reported confidence against labelled outcomes, so
+  that a numeric score could be justified.
+- Batch processing of documents.
 
 ---
 
-## 27. License
+## 30. License
 
 This project is submitted as academic coursework.
 

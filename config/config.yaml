@@ -11,11 +11,11 @@ llm:
   # OpenAI-compatible HTTP API. No API key and no per-request cost.
   # Setup:  ollama pull <model>   (the server listens on port 11434)
   provider: ollama
-  # Chosen by measuring qwen2.5 (7B) and qwen3:14b on the 7 evaluation cases
-  # (README section 13.16). qwen2.5 was 8x faster but judged 11 of 13
-  # candidates genuine, including absurd readings; qwen3:14b rejected the
-  # documented false positives. Override per run with LLM_MODEL in .env.
-  model: qwen3:14b
+  # Chosen for practical local speed (README section 13.16): fresh analyses take
+  # ~14-38 s, versus minutes on qwen3:14b. Earlier qwen2.5 (7B) judged 11 of 13
+  # candidates genuine, including absurd readings, so it is not a good default.
+  # Override per run with LLM_MODEL in .env.
+  model: qwen3:4b-instruct-2507-q4_K_M
   base_url: http://localhost:11434/v1
   # 0.0: adjudication is classification over evidence, not creative writing.
   # The lowest temperature gives the most repeatable verdicts.
@@ -24,8 +24,9 @@ llm:
   # up to 1,043 completion tokens for a 3-candidate batch, and a batch may hold
   # 6 candidates, so 4000 leaves headroom against truncation.
   max_tokens: 4000
-  # Local inference is slow: qwen3:14b took 108-287 s per sentence on this
-  # machine (mean 185 s). 600 s is roughly 2x the slowest measured case.
+  # Set from the earlier qwen3:14b runs (108-287 s per sentence, mean 185 s);
+  # 600 s is roughly 2x the slowest. The 4B model is far faster, so this is
+  # generous headroom for slower hardware rather than a tight limit.
   timeout_seconds: 600
   # Retrying a local timeout re-runs the same slow computation on the same
   # hardware, so only one retry is allowed.
@@ -59,7 +60,7 @@ adjudication:
   # ask for corrected JSON. Bounded: exactly one repair attempt.
   enable_repair: true
   # Second, separate call that rewrites ONLY candidates judged genuine.
-  generate_rewrites: true
+  generate_rewrites: false
   # Prompt files, relative to prompts/.
   adjudication_prompt: ambiguity_analysis.txt
   rewrite_prompt: rewrite_generation.txt

@@ -577,18 +577,60 @@ class PipelineDiagnostics(BaseModel):
     candidates_confirmed: int = 0
 
 
+class SentenceVerdict(str, Enum):
+    """A deterministic rollup of candidate verdicts - never a fabricated score.
+
+    Every value here is a direct, checkable restatement of the per-candidate
+    verdicts already visible in ``AdjudicationReport.adjudications``: nothing
+    is computed that could not be recomputed by hand from that list. This is
+    a label, not a probability, and it is not a substitute for reading the
+    candidates - see ``SentenceSummary.explanation``.
+    """
+
+    NO_CANDIDATES = "no_candidates"
+    AMBIGUOUS = "ambiguous"
+    NOT_AMBIGUOUS = "not_ambiguous"
+    UNCERTAIN = "uncertain"
+    INCOMPLETE = "incomplete"
+
+
+class SentenceSummary(BaseModel):
+    """A transparent count-based rollup of one sentence's candidates.
+
+    Deliberately contains no numeric score. Every field is a plain count or
+    a verdict derived by simple precedence rules from
+    ``AdjudicationReport.adjudications`` - see
+    ``pipeline.summary.build_sentence_summary`` for the exact rule, which is
+    the only place this is computed.
+    """
+
+    verdict: SentenceVerdict
+    total_candidates: int = 0
+    genuine_count: int = 0
+    not_ambiguous_count: int = 0
+    uncertain_count: int = 0
+    unresolved_count: int = 0
+    genuine_candidate_ids: list[str] = Field(default_factory=list)
+    explanation: str = ""
+
+
 class AdjudicationReport(BaseModel):
     """The object returned by the pipeline and rendered by every interface.
 
-    Deliberately has no sentence-level verdict or score: aggregating
-    candidate-level judgements into one number would hide the per-candidate
-    evidence this project is built to keep visible.
+    Carries a deterministic per-sentence rollup (``summary``) alongside the
+    candidate-level detail, but deliberately no fabricated numeric score:
+    aggregating candidate-level judgements into one uncalibrated number would
+    hide the per-candidate evidence this project is built to keep visible.
+    Every field of ``summary`` is recomputable by hand from ``adjudications``.
     """
 
     text: str
     context: Optional[str] = None
     adjudications: list[CandidateAdjudication] = Field(default_factory=list)
     diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)
+    summary: SentenceSummary = Field(
+        default_factory=lambda: SentenceSummary(verdict=SentenceVerdict.NO_CANDIDATES)
+    )
 
 
 # ---------------------------------------------------------------------------

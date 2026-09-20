@@ -22,11 +22,13 @@ from ambisense.cli.render import (
     render_adjudication,
     render_candidates,
     render_config_check,
+    render_evaluation_report,
     render_nlp_analysis,
     render_sense_rankings,
     rule,
 )
 from ambisense.config import ConfigError, load_settings
+from ambisense.evaluation import DatasetError, load_dataset, run_evaluation
 from ambisense.llm import build_adjudicator
 from ambisense.llm.health import check_server, ollama_pull_hint, ollama_serve_hint
 from ambisense.logging_setup import configure_logging, get_logger
@@ -106,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Opt-in: run data/examples/adjudication_cases.json against the "
             "local Ollama model. Slow on local hardware. Never run by pytest."
+        ),
+    )
+    parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help=(
+            "Opt-in: run data/evaluation/sentence_labels.json against the "
+            "local Ollama model and report accuracy/precision/recall/F1. "
+            "Slow on local hardware. Never run by pytest."
         ),
     )
     parser.add_argument(
@@ -253,6 +264,40 @@ def command_live_llm_test(settings) -> int:
     return worst
 
 
+def command_evaluate(settings) -> int:
+    """Opt-in: score the labelled dataset against the local model.
+
+    Never invoked by pytest. Mirrors ``command_live_llm_test``'s shape: the
+    server is checked up front so a missing model fails in seconds, and one
+    adjudicator is shared across cases so the response cache applies.
+    """
+    server = check_server(settings.llm)
+    if not server.ready:
+        reason = (
+            f"model '{settings.llm.model}' is not installed "
+            f"({ollama_pull_hint(settings.llm.model)})"
+            if server.reachable
+            else f"no Ollama server at {settings.llm.base_url} "
+                 f"({ollama_serve_hint()})"
+        )
+        print(f"--evaluate cannot run: {reason}. No request was sent.",
+              file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    dataset_path = (
+        settings.project_root / "data" / "evaluation" / "sentence_labels.json"
+    )
+    try:
+        dataset = load_dataset(dataset_path)
+    except DatasetError as exc:
+        print(f"Dataset error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    results = run_evaluation(settings, dataset, adjudicator=build_adjudicator(settings))
+    print(render_evaluation_report(results))
+    return EXIT_OK
+
+
 def command_dump_nlp(settings, text: str, context: str | None) -> int:
     cleaned = clean_and_validate(text, context, settings.nlp)
     for warning in cleaned.warnings:
@@ -293,6 +338,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.live_llm_test:
         try:
             return command_live_llm_test(settings)
+        except (ModelLoadError, SetupError) as exc:
+            print(f"Setup error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_ERROR
+
+    if args.evaluate:
+        try:
+            return command_evaluate(settings)
         except (ModelLoadError, SetupError) as exc:
             print(f"Setup error: {exc}", file=sys.stderr)
             return EXIT_CONFIG_ERROR

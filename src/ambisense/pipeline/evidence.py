@@ -9,6 +9,7 @@ evidence pipeline is defined in exactly one place. Makes no network call.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from ambisense.ambiguity import DetectorRegistry
 from ambisense.logging_setup import get_logger
@@ -33,13 +34,25 @@ class Evidence:
     rankings: list[SenseRanking]
 
 
-def gather_evidence(settings, text: str, context: str | None) -> Evidence:
-    """Validation -> linguistic analysis -> detectors -> sense ranking."""
+def gather_evidence(
+    settings,
+    text: str,
+    context: str | None,
+    *,
+    analyzer: Optional[LinguisticAnalyzer] = None,
+) -> Evidence:
+    """Validation -> linguistic analysis -> detectors -> sense ranking.
+
+    Args:
+        analyzer: Reused when supplied, so the spaCy model is not reloaded
+            from disk on every call (e.g. across Streamlit reruns); built
+            fresh from ``settings`` otherwise.
+    """
     cleaned = clean_and_validate(text, context, settings.nlp)
     for warning in cleaned.warnings:
         logger.warning("%s", warning)
 
-    analyzer = LinguisticAnalyzer(settings.nlp.spacy_model)
+    analyzer = analyzer or LinguisticAnalyzer(settings.nlp.spacy_model)
     analysis = analyzer.analyze(cleaned.text)
     context_analysis = (
         analyzer.analyze(cleaned.context) if cleaned.context else None

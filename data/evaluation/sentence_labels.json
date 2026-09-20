@@ -1,0 +1,143 @@
+{
+  "description": "Labelled dataset for the Phase 7 evaluation harness (`--evaluate`). Ground truth is a single developer's sentence-level judgement: does the sentence contain at least one genuine ambiguity? This is a small, single-annotator dataset - see the README's Phase 7 section and Future Work for that documented limitation. Kept separate from data/examples/adjudication_cases.json, which has no ground-truth label and is for --live-llm-test demos only.",
+  "cases": [
+    {
+      "id": "lexical_bat",
+      "text": "She found a bat in the garage.",
+      "label": "ambiguous",
+      "notes": "'bat' (baseball equipment vs. the animal) with no disambiguating context; both readings are ordinary."
+    },
+    {
+      "id": "lexical_plant",
+      "text": "He works at the plant near the river.",
+      "label": "ambiguous",
+      "notes": "'plant' (factory vs. a living plant) - a factory reading is more common, but both are available without further context."
+    },
+    {
+      "id": "syntactic_binoculars",
+      "text": "The detective observed the woman with binoculars.",
+      "label": "ambiguous",
+      "notes": "PP-attachment: 'with binoculars' can modify 'observed' (instrument) or 'woman' (possession)."
+    },
+    {
+      "id": "syntactic_old_women",
+      "text": "Old men and women gathered in the square.",
+      "label": "ambiguous",
+      "notes": "Coordination scope: 'old' may modify only 'men', or both 'men and women'."
+    },
+    {
+      "id": "referential_sarah_emily",
+      "text": "Sarah told Emily that she had won the award.",
+      "label": "ambiguous",
+      "notes": "'she' has two plausible antecedents (Sarah, Emily) surviving number/animacy agreement."
+    },
+    {
+      "id": "referential_they_closed",
+      "text": "The company shipped the packages to the clients before they closed for the holidays.",
+      "label": "ambiguous",
+      "notes": "'they' could refer to the company or the clients; both can plausibly 'close for the holidays'."
+    },
+    {
+      "id": "referential_lawyer_client",
+      "text": "The lawyer informed the client that she needed additional documents.",
+      "label": "ambiguous",
+      "notes": "'she' could be the lawyer or the client - both are grammatically and pragmatically available."
+    },
+    {
+      "id": "semantic_fish_cook",
+      "text": "The fish is ready to cook.",
+      "label": "ambiguous",
+      "notes": "Tough-construction agent/patient ambiguity: the fish could be about to cook something, or about to be cooked."
+    },
+    {
+      "id": "semantic_history_teacher",
+      "text": "She is an American history teacher.",
+      "label": "ambiguous",
+      "notes": "Classic noun-compound ambiguity: a teacher of American history, or an American who teaches history."
+    },
+    {
+      "id": "scope_every_senator",
+      "text": "Every senator didn't vote for the bill.",
+      "label": "ambiguous",
+      "notes": "Quantifier/negation scope: 'no senator voted for it' vs. 'not every senator voted for it'."
+    },
+    {
+      "id": "scope_all_students",
+      "text": "All the students didn't pass the test.",
+      "label": "ambiguous",
+      "notes": "Same quantifier/negation scope pattern as scope_every_senator, with 'all' instead of 'every'."
+    },
+    {
+      "id": "pragmatic_pass_salt",
+      "text": "Could you pass the salt?",
+      "label": "ambiguous",
+      "notes": "Literal question about ability vs. a conventional indirect request - the README's own Section 6.6 example pattern."
+    },
+    {
+      "id": "pragmatic_mind_door",
+      "text": "Would you mind closing the door?",
+      "label": "ambiguous",
+      "notes": "Literal question about willingness vs. a polite request; a conventional indirect speech act."
+    },
+    {
+      "id": "control_paycheck",
+      "text": "She deposited her paycheck at the credit union on Main Street.",
+      "label": "not_ambiguous",
+      "notes": "No polysemous target word and only one plausible attachment; a lexical/syntactic control."
+    },
+    {
+      "id": "control_fetch",
+      "text": "The children played fetch with the golden retriever in the park.",
+      "label": "not_ambiguous",
+      "notes": "Ordinary sentence with no structural or lexical ambiguity signal expected."
+    },
+    {
+      "id": "control_newspaper",
+      "text": "He read the newspaper while waiting for the bus.",
+      "label": "not_ambiguous",
+      "notes": "Simple coordination-free sentence; control for false positives on common nouns."
+    },
+    {
+      "id": "control_salad",
+      "text": "The chef sliced the tomatoes for the salad.",
+      "label": "not_ambiguous",
+      "notes": "No tough-construction, no unresolved pronoun, no quantifier; a semantic-detector control."
+    },
+    {
+      "id": "control_meeting",
+      "text": "After the meeting ended, everyone went home for the evening.",
+      "label": "not_ambiguous",
+      "notes": "'everyone' is a quantifier but there is no negation or second quantifier in the same clause."
+    },
+    {
+      "id": "control_three_students",
+      "text": "Three of the ten students failed the final exam.",
+      "label": "not_ambiguous",
+      "notes": "Numeric quantifiers with no negation; a scope-detector control."
+    },
+    {
+      "id": "control_nurse_patient",
+      "text": "The nurse gave the patient his medication before the surgery started.",
+      "label": "not_ambiguous",
+      "notes": "Only one male referent ('the patient') is available for 'his'; a referential-detector control."
+    },
+    {
+      "id": "control_teacher_explained",
+      "text": "The teacher explained the assignment clearly to the students.",
+      "label": "not_ambiguous",
+      "notes": "Plain declarative sentence with no structural ambiguity signal expected."
+    },
+    {
+      "id": "control_committee",
+      "text": "The committee will announce the winner at the ceremony tomorrow.",
+      "label": "not_ambiguous",
+      "notes": "Collective noun with no quantifier or negation; control for the scope detector."
+    },
+    {
+      "id": "control_soldiers",
+      "text": "The soldiers marched across the bridge at dawn.",
+      "label": "not_ambiguous",
+      "notes": "No PP-attachment alternative and no polysemous target word in this usage."
+    }
+  ]
+}
