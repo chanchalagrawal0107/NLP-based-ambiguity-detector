@@ -56,8 +56,8 @@ available to a human reader, and how would you phrase it unambiguously?"*
 **What exists today** is that pipeline end to end: configuration, input
 validation, spaCy linguistic analysis, rule-based candidate detection,
 context-based WordNet sense ranking, LLM adjudication of each candidate with
-interpretations and rewrites, a deterministic sentence-level verdict, a CLI, a
-Streamlit interface, and an evaluation harness with a labelled dataset. What
+interpretations (and optional rewrites), a deterministic sentence-level verdict,
+a CLI, a Streamlit interface, and an evaluation harness with a labelled dataset. What
 it does **not** do is produce a numeric ambiguity score - that was a
 deliberate decision, explained in [Section 14](#14-phase-5--sentence-level-verdict-complete).
 See [Section 27](#27-development-phases) for the phase list.
@@ -934,7 +934,9 @@ and keeping them apart keeps each prompt focused. It also makes "no rewrites
 for rejected candidates" *structural*: rejected candidates are simply never
 sent to the rewrite prompt, rather than trusting the model to leave a field
 empty. It costs at most one extra request per sentence, and a failed rewrite
-never changes a verdict.
+never changes a verdict. It is **off by default** (`adjudication.generate_rewrites:
+false`) to keep analyses fast on a small local model; set it to `true` to get
+rewrites. When off, genuine candidates show `rewrites: not_applicable`.
 
 ### 13.6 What evidence is sent (and what is withheld)
 
@@ -1254,7 +1256,7 @@ terminal rendering is separated from it:
 | **Analyze** button | Disabled until the server and model are ready, so a missing model fails visibly rather than after a long wait |
 | Sentence verdict | Coloured banner plus the summary explanation (Section 14) |
 | Highlighted text | Only spans the LLM confirmed as **genuine** are highlighted, with the detector's reason as a tooltip |
-| Candidate panels | The three evidence layers kept apart - rule-based, semantic, LLM - with interpretations and rewrites, as in the CLI |
+| Candidate panels | The three evidence layers kept apart - rule-based, semantic, LLM - with interpretations (and rewrites when enabled), as in the CLI |
 | Footer | Provider, model, request count, cache hit, repair flag, and the "self-reported, not calibrated" note |
 
 Design points:
@@ -1338,13 +1340,94 @@ scikit-learn. The design choice that matters is **abstention**:
 
 This checks that the Ollama server and model are ready, runs all 23 sentences
 through the real pipeline and prints the metrics and a per-case table. It is
-opt-in and never runs under pytest. On `qwen3:14b` it takes on the order of an
-hour on this machine; the response cache makes a re-run of the same sentences
-and prompts instant.
+opt-in and never runs under pytest. On the default
+`qwen3:4b-instruct-2507-q4_K_M` the run reported in 16.4 took about 9 minutes
+of wall-clock time on the development machine (it took on the order of an hour
+on the earlier `qwen3:14b`). Validated replies are cached, so re-running the
+same sentences and prompts is much faster - but a reply that failed validation
+is not cached and can come out differently the next time.
 
 ### 16.4 Results
 
-@@EVAL_RESULTS@@
+Run on `qwen3:4b-instruct-2507-q4_K_M`, default configuration (rewrites off),
+one run, 2026-09-20:
+
+| Measure | Value |
+|---|---|
+| Cases | 23 (13 ambiguous, 10 controls) |
+| Confident predictions | 21 |
+| Abstained (`incomplete`) | 2 (9%) |
+| Accuracy, confident predictions only | **0.714** (15 / 21) |
+| Precision | 0.800 (8 / 10) |
+| Recall | 0.667 (8 / 12) |
+| F1 | 0.727 |
+| Pessimistic accuracy (abstentions counted wrong, over all 23) | **0.652** (15 / 23) |
+
+Confusion matrix on the 21 confident predictions (`ambiguous` = positive):
+
+| | Predicted ambiguous | Predicted not ambiguous |
+|---|---|---|
+| **Labelled ambiguous** | TP = 8 | FN = 4 |
+| **Labelled not ambiguous** | FP = 2 | TN = 7 |
+
+The two accuracies are both shown because the abstentions matter: 0.714 is
+what the system gets right when it commits, 0.652 is what it gets right overall.
+
+Per case (label / system verdict):
+
+| Case | Label | Verdict | Result |
+|---|---|---|---|
+| lexical_bat | ambiguous | ambiguous | correct |
+| lexical_plant | ambiguous | ambiguous | correct |
+| syntactic_binoculars | ambiguous | ambiguous | correct |
+| syntactic_old_women | ambiguous | incomplete | abstain |
+| referential_sarah_emily | ambiguous | ambiguous | correct |
+| referential_they_closed | ambiguous | ambiguous | correct |
+| referential_lawyer_client | ambiguous | not_ambiguous | **wrong (FN)** |
+| semantic_fish_cook | ambiguous | ambiguous | correct |
+| semantic_history_teacher | ambiguous | not_ambiguous | **wrong (FN)** |
+| scope_every_senator | ambiguous | ambiguous | correct |
+| scope_all_students | ambiguous | ambiguous | correct |
+| pragmatic_pass_salt | ambiguous | not_ambiguous | **wrong (FN)** |
+| pragmatic_mind_door | ambiguous | not_ambiguous | **wrong (FN)** |
+| control_paycheck | not_ambiguous | ambiguous | **wrong (FP)** |
+| control_fetch | not_ambiguous | not_ambiguous | correct |
+| control_newspaper | not_ambiguous | not_ambiguous | correct |
+| control_salad | not_ambiguous | no_candidates | correct |
+| control_meeting | not_ambiguous | not_ambiguous | correct |
+| control_three_students | not_ambiguous | not_ambiguous | correct |
+| control_nurse_patient | not_ambiguous | ambiguous | **wrong (FP)** |
+| control_teacher_explained | not_ambiguous | not_ambiguous | correct |
+| control_committee | not_ambiguous | not_ambiguous | correct |
+| control_soldiers | not_ambiguous | incomplete | abstain |
+
+**How to read this.**
+
+- **It is a sanity check, not a benchmark.** With 23 sentences, one sentence is
+  4.3 percentage points; the annotation caveats in 16.1 all apply, and the
+  headline number is optimistic about real text.
+- **The misses cluster by type.** All four false negatives are referential,
+  semantic or pragmatic sentences; both pragmatic cases were missed (one of
+  them, `pragmatic_pass_salt`, is a label 16.1 already flags as arguable). The
+  lexical, syntactic and scope positives were all judged ambiguous, apart from
+  the abstention below. With two to three sentences per type, this is a pattern
+  to look at, not a measured per-type rate.
+- **Two abstentions, one explained.** For `syntactic_old_women` a follow-up
+  `--analyze` showed one of its three candidates (*square*) returned an invalid
+  reply (`LLM_INVALID_RESPONSE`) while the other two were judged - `incomplete`
+  outranks every other verdict (Section 14.2). For `control_soldiers` the
+  cause was not captured during the run, and a later re-run judged both of its
+  candidates `not_ambiguous`, so the abstention did not reproduce. Small models
+  returning malformed JSON occasionally is the likely category, but that is not
+  established here.
+- **Not deterministic.** The result is one run. An invalid reply is not cached,
+  so a re-run can differ on exactly those sentences (it would now likely turn
+  `control_soldiers` into a correct `not_ambiguous`).
+- **The causes of the two false positives were not analysed.** Whether they
+  come from the detectors flagging harmless structure or from the model
+  accepting it has not been investigated.
+- **One model only.** These numbers say nothing about `qwen3:14b` or
+  `qwen2.5`, which were not run on this dataset.
 
 ### 16.5 What is tested offline
 
@@ -1747,8 +1830,10 @@ it resolved. See [Known Limitations](#26-known-limitations).
 
 ### LLM adjudication output
 
-Actual output of the shipped command, with `qwen3:14b` running locally (this
-particular run was answered from the response cache, hence `requests: 0`):
+Actual output of the shipped command, with `qwen3:4b-instruct-2507-q4_K_M`
+running locally (this particular run was answered from the response cache,
+hence `requests: 0`; the sentence had just been analysed by the evaluation run
+in 16.4):
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --analyze "I saw the man with the telescope."
@@ -1780,23 +1865,30 @@ Sentence verdict: AMBIGUOUS
 
   3. LLM judgement (Phase 4):
      verdict: GENUINE_AMBIGUITY
-     confidence: 0.80 (self-reported)
+     confidence: 0.95 (self-reported)
      explanation:
-       Both readings are structurally valid and plausible in normal usage
-       without additional context to disambiguate.
+       A competent reader of ordinary English could reasonably interpret
+       'I saw the man with the telescope' in two distinct ways: either
+       that the man was using a telescope, or that the speaker used a
+       telescope to see the man. Neither the sentence nor the supplied
+       context resolves which interpretation is intended. The syntactic
+       structure allows both attachments, and both are semantically
+       plausible in ordinary usage.
      interpretations:
-       1. The man had a telescope
-          (The prepositional phrase 'with the telescope' modifies 'man',
-          describing him as the possessor of the telescope.)
-       2. I used a telescope to see the man
-          (The prepositional phrase 'with the telescope' modifies 'saw',
-          indicating the means by which the seeing occurred.)
-     suggested rewrites:
-       1. I saw the man who had a telescope.
-       2. I saw the man using a telescope.
+       1. I saw the man, and he was using a telescope.
+          (The prepositional phrase 'with the telescope' can modify 'man' to
+          indicate that the man is using a telescope, which is a plausible
+          and ordinary reading.)
+       2. I saw the man with a telescope, meaning I used a telescope to
+       see him.
+          (The prepositional phrase 'with the telescope' can modify 'saw',
+          indicating that the speaker used a telescope to observe the man,
+          which is also a grammatically valid and contextually reasonable
+          reading.)
+     rewrites: not_applicable
 
 ======================================================================
-LLM: ollama qwen3:14b | requests: 0 | cache hit: True | repair: False
+LLM: ollama qwen3:4b-instruct-2507-q4_K_M | requests: 0 | cache hit: True | repair: False
 Genuine ambiguities confirmed: 1 of 1 candidates
 
 Note: LLM confidence is self-reported by the model and is NOT a
@@ -1807,21 +1899,22 @@ shown above and can be wrong.
 
 The "Sentence verdict" lines are the Phase 5 rollup
 ([Section 14](#14-phase-5--sentence-level-verdict-complete)); the panels below
-them are the per-candidate evidence it was computed from.
+them are the per-candidate evidence it was computed from. `rewrites:
+not_applicable` is expected here: rewrite generation is disabled in the default
+configuration ([13.5](#135-the-prompt-files)).
 
-The same sentence has now been through the model three times. The first, fresh
-run in the 13.16 measurement took 200 s and reported confidence **0.95**; a
-later fresh run took **479 s** (the model reasoned for longer: 1,835 completion
-tokens against 808) and reported **0.70**; the cached run shown above carries
-**0.80**. The verdict and the two readings were the same each time. It shows
-two things directly: local timings vary a lot between runs, and self-reported
-confidence is not stable even at temperature 0. An identical repeat of an
-uncached run took 6 s from the cache.
+The same sentence was also run several times on the earlier `qwen3:14b`. There
+the first fresh run took 200 s and reported confidence **0.95**, a later fresh
+run took **479 s** and reported **0.70**, and a cached run carried **0.80**; the
+4B run above reports **0.95** again. The verdict and the two readings were the
+same each time. It shows two things directly: local timings vary a lot between
+runs and models, and self-reported confidence is not stable even at temperature
+0.
 
-On a fresh run two requests are made: one adjudication and, because the
-candidate was judged genuine, one rewrite request. For a rejected candidate the
-rewrite request is never sent - see the crane example in 13.16, where both
-candidates were judged not ambiguous and the run made a single request.
+On a fresh run with the default configuration one request is made per sentence
+(the adjudication of all its candidates). If `generate_rewrites` is enabled, a
+second request is sent only when at least one candidate was judged genuine; a
+sentence whose candidates are all rejected never triggers it.
 
 If Ollama is not running, the same command still prints the rule-based and
 semantic evidence, marks the candidate `LLM_UNAVAILABLE` with the hint
@@ -2334,6 +2427,11 @@ it now does: the model names the WordNet sense key it selected, and
 - **Only one model was evaluated end to end for the headline result.**
   Other models can give very different verdicts (13.16); the numbers in 16.4
   belong to the model named there.
+- **The 4B model is a speed-for-reliability trade.** On the evaluation it
+  missed 4 of the 12 ambiguous sentences it committed on, flagged 2 of the 9
+  controls it committed on,
+  and abstained twice (16.4). A user should treat its verdicts as suggestions
+  to review, not as answers.
 - **The interface is a local, synchronous demo.** No progress streaming, no
   authentication, no deployment, and it has not been reviewed in a browser as
   part of an automated check.
@@ -2356,7 +2454,6 @@ These are inherent to the problem:
   confident explanation of an ambiguity that does not exist. This is the
   specific failure the hybrid architecture is designed to mitigate — mitigate,
   not eliminate.
-@@CLAIMS@@
 
 ---
 
